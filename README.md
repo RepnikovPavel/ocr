@@ -13,3 +13,13 @@ docker run --rm --gpus all --ipc=host -v /mnt:/mnt -v "$PWD:/workspace" dots-moc
 ```
 
 `src/dots_mocr/transformers_patch` is the local port of commit `d2eb02900bcee0cf02b653bbd31c3117b132e060`. Checkpoints and generated results are not committed.
+
+```sh
+python3 scripts/prepare_checkpoint.py /path/to/checkpoint --check
+MAX_NEW_TOKENS=8 scripts/test_dots_mocr_cpu.sh
+MAX_NEW_TOKENS=8 scripts/test_dots_mocr_gpu.sh
+MAX_NEW_TOKENS=8 scripts/test_dots_mocr_svg_cpu.sh
+MAX_NEW_TOKENS=8 scripts/test_dots_mocr_svg_gpu.sh
+```
+
+Measured results: `reports/validation_2026-07-12.json`.

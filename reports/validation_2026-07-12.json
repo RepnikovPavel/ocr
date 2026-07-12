@@ -1,0 +1,82 @@
+{
+  "source_commit": "ac1ffa5",
+  "runtime": {
+    "base_image": "trtllm:1.3.0rc20",
+    "python": "3.12.3",
+    "torch": "2.11.0a0+eb65b36914.nv26.02",
+    "transformers": "5.5.4",
+    "tensorrt_llm": "1.3.0rc20",
+    "cuda_runtime": "13.1",
+    "gpu": "NVIDIA GeForce RTX 4070 Ti"
+  },
+  "tests": {
+    "unit": {
+      "passed": 5,
+      "seconds": 8.21
+    }
+  },
+  "benchmarks": {
+    "input": "synthetic 1200x750 four-panel chart",
+    "max_new_tokens": 8,
+    "dots_mocr": {
+      "cpu": {
+        "dtype": "float32",
+        "load_seconds": 2.7443658860011055,
+        "inference_seconds": 70.09431382600087,
+        "output_tokens_per_second": 0.1141319397156645,
+        "rss_peak_bytes": 19106852864
+      },
+      "gpu": {
+        "dtype": "bfloat16",
+        "load_seconds": 2.564248658998622,
+        "inference_seconds": 2.314872209999521,
+        "output_tokens_per_second": 3.4559143115730153,
+        "rss_peak_bytes": 7082430464,
+        "cuda_peak_memory_bytes": 8716612608
+      },
+      "gpu_inference_speedup": 30.279992788895836
+    },
+    "dots_mocr_svg": {
+      "cpu": {
+        "dtype": "float32",
+        "load_seconds": 2.8695276110011037,
+        "inference_seconds": 67.07043182900088,
+        "output_tokens_per_second": 0.11927759791969678,
+        "rss_peak_bytes": 19105951744
+      },
+      "gpu": {
+        "dtype": "bfloat16",
+        "load_seconds": 2.6603933360001975,
+        "inference_seconds": 2.332617793999816,
+        "output_tokens_per_second": 3.429623155828773,
+        "rss_peak_bytes": 7083626496,
+        "cuda_peak_memory_bytes": 8716035072
+      },
+      "gpu_inference_speedup": 28.753288259022074
+    }
+  },
+  "quality": {
+    "geometry_svg": {
+      "input_size": [583, 550],
+      "svg_bytes": 1113,
+      "normalized_mae": 0.00986918,
+      "psnr_db": 22.5716
+    },
+    "synthetic_svg": {
+      "input_size": [1200, 750],
+      "svg_bytes": 16395,
+      "normalized_mae": 0.0434041,
+      "psnr_db": 15.5545
+    },
+    "diploma_dots_mocr": {
+      "pdf_page": 28,
+      "layout_elements": 9,
+      "categories": {
+        "Picture": 2,
+        "Caption": 2,
+        "Text": 4,
+        "Page-footer": 1
+      }
+    }
+  }
+}
