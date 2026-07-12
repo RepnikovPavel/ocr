@@ -41,6 +41,8 @@ def apply_rotary_pos_emb_vision(tensor: torch.Tensor, freqs: torch.Tensor) -> to
 class VisionRotaryEmbedding(nn.Module):
     def __init__(self, dim: int, theta: float = 10000.0) -> None:
         super().__init__()
+        self.dim = dim
+        self.theta = theta
         inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2, dtype=torch.float) / dim))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
@@ -336,6 +338,15 @@ class DotsVisionTransformer(PreTrainedModel):
                 module.weight.data.normal_(mean=0.0, std=std)
             if module.padding_idx is not None and not getattr(module.weight, "_is_hf_initialized", False):
                 module.weight.data[module.padding_idx].zero_()
+        elif isinstance(module, VisionRotaryEmbedding):
+            inv_freq = 1.0 / (
+                module.theta
+                ** (
+                    torch.arange(0, module.dim, 2, dtype=torch.float, device=module.inv_freq.device)
+                    / module.dim
+                )
+            )
+            module.inv_freq.copy_(inv_freq)
 
     @property
     def dtype(self) -> torch.dtype:
