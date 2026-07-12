@@ -87,8 +87,8 @@ class DotsMOCRParser:
             ckpt,
             config=config,
             attn_implementation=self.attn_implementation,
-            dtype=self.dtype,
-            device_map={"": self.device},
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
             local_files_only=True,
             trust_remote_code=False,
         )
