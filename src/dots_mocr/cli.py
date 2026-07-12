@@ -83,13 +83,23 @@ class DotsMOCRParser:
             trust_remote_code=False,
         )
         config.vision_config.attn_implementation = self.attn_implementation
+
+        # Proper model parallel device map using accelerate (balanced split of layers across GPUs)
+        from accelerate import infer_auto_device_map, init_empty_weights
+        with init_empty_weights():
+            dummy_model = AutoModelForCausalLM.from_config(config)
+        device_map = infer_auto_device_map(
+            dummy_model,
+            max_memory={0: "14GiB", 1: "14GiB"},
+        )
+        print(f"[parser] using device_map for model parallel: {device_map}")
+
         self.model = AutoModelForCausalLM.from_pretrained(
             ckpt,
             config=config,
             attn_implementation=self.attn_implementation,
             torch_dtype=torch.bfloat16,
-            device_map="auto",
-            max_memory={0: "14GiB", 1: "14GiB"},  # encourage split for model parallel while keeping ops consistent
+            device_map=device_map,
             low_cpu_mem_usage=True,
             local_files_only=True,
             trust_remote_code=False,

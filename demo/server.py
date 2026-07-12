@@ -83,6 +83,22 @@ def get_parser():
             t0 = time.time()
             num_threads = int(os.environ.get("DEMO_NUM_THREADS", "4"))
             print(f"[demo] using num_thread={num_threads} for PDF parallelism (good for 100+ page docs)")
+
+            # Choose the GPU with the most free memory for the model (to maximize headroom for inference)
+            # This makes the demo usable even when other processes are running.
+            try:
+                import subprocess
+                out = subprocess.check_output(
+                    ['nvidia-smi', '--query-gpu=memory.free', '--format=csv,noheader,nounits'],
+                    text=True, timeout=2
+                )
+                frees = [int(x.strip()) for x in out.strip().split('\n')]
+                best_idx = frees.index(max(frees))
+                dev = f"cuda:{best_idx}"
+                print(f"[demo] loading model on {dev} (most free: {max(frees)} MiB)")
+            except Exception:
+                dev = "cuda"
+
             PARSER = DotsMOCRParser(
                 ckpt=CKPTDIR,
                 temperature=0.1,
@@ -92,7 +108,7 @@ def get_parser():
                 dpi=200,
                 output_dir=str(JOBS_DIR),
                 attn_implementation="sdpa",
-                device="auto",
+                device=dev,
                 dtype="bfloat16",
                 max_pixels=2_500_000,  # lower than default to reduce VRAM for vision features on 16GB GPUs
             )
