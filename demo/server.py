@@ -286,13 +286,32 @@ async def api_parse(
 
     t0 = time.time()
     try:
-        results = parser.parse_file(
-            str(input_path),
-            output_dir=str(out_dir),
-            prompt_mode=prompt,
-            custom_prompt=custom_prompt if prompt == "prompt_general" else None,
-            pages=pages_list,
-        )
+        if pages_list and len(pages_list) > 2:
+            # Batch processing for large documents (e.g. 100+ pages) to avoid OOM
+            # Process small groups of pages sequentially, clear cache between batches
+            import torch
+            batch_size = 2
+            all_results = []
+            for i in range(0, len(pages_list), batch_size):
+                batch = pages_list[i : i + batch_size]
+                batch_res = parser.parse_file(
+                    str(input_path),
+                    output_dir=str(out_dir),
+                    prompt_mode=prompt,
+                    custom_prompt=custom_prompt if prompt == "prompt_general" else None,
+                    pages=batch,
+                )
+                all_results.extend(batch_res)
+                torch.cuda.empty_cache()
+            results = all_results
+        else:
+            results = parser.parse_file(
+                str(input_path),
+                output_dir=str(out_dir),
+                prompt_mode=prompt,
+                custom_prompt=custom_prompt if prompt == "prompt_general" else None,
+                pages=pages_list,
+            )
     except Exception as e:
         raise HTTPException(500, f"Inference failed: {e}") from e
 
