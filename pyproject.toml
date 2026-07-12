@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "repnikov-dots-mocr"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "CairoSVG==2.8.2",
+    "PyMuPDF==1.28.0",
+    "qwen-vl-utils==0.0.14",
+]
+
+[project.scripts]
+dots-mocr = "dots_mocr.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
