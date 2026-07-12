@@ -9,6 +9,7 @@ requires-python = ">=3.12"
 dependencies = [
     "CairoSVG==2.8.2",
     "PyMuPDF==1.28.0",
+    "packaging==25.0",
     "qwen-vl-utils==0.0.14",
 ]
 
