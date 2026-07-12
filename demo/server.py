@@ -286,11 +286,11 @@ async def api_parse(
 
     t0 = time.time()
     try:
-        if pages_list and len(pages_list) > 2:
-            # Batch processing for large documents (e.g. 100+ pages) to avoid OOM
-            # Process small groups of pages sequentially, clear cache between batches
+        if pages_list and len(pages_list) > 1:
+            # Process pages one-by-one (or very small batches) to stay within 16GB GPU limits
+            # This allows 100-page PDFs to complete without OOM, at the cost of longer wall time.
             import torch
-            batch_size = 2
+            batch_size = 1
             all_results = []
             for i in range(0, len(pages_list), batch_size):
                 batch = pages_list[i : i + batch_size]
