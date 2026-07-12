@@ -109,7 +109,7 @@ def get_parser():
                 dpi=200,
                 output_dir=str(JOBS_DIR),
                 attn_implementation="sdpa",
-                device=dev,
+                device="auto",  # trigger model parallel split in parser
                 dtype="bfloat16",
                 max_pixels=1_500_000,  # even lower to fit 1 page inference on 16GB cards after weights (~14GB)
             )
