@@ -15,7 +15,7 @@ from dots_mocr.transformers_patch import register_transformers
 
 from dots_mocr.utils.consts import image_extensions, MIN_PIXELS, MAX_PIXELS
 from dots_mocr.utils.image_utils import get_image_by_fitz_doc, fetch_image, smart_resize
-from dots_mocr.utils.doc_utils import fitz_doc_to_image, load_images_from_pdf
+from dots_mocr.utils.doc_utils import fitz_doc_to_image, load_pdf_pages
 from dots_mocr.utils.prompts import dict_promptmode_to_prompt
 from dots_mocr.utils.layout_utils import post_process_output, draw_layout_on_image, pre_process_bboxes, parse_scene_text_output, post_process_scene_text, draw_scene_text_on_image, format_scene_text_to_markdown
 from dots_mocr.utils.svg_utils import extract_svg_from_response, svg_to_png, create_comparison_image
@@ -52,6 +52,10 @@ class DotsMOCRParser:
         self.attn_implementation = attn_implementation
         self.device = self._resolve_device(device)
         self.dtype = self._resolve_dtype(dtype)
+        if self.attn_implementation == "flash_attention_2" and self.device == "cpu":
+            raise ValueError("flash_attention_2 requires CUDA")
+        if self.attn_implementation == "flash_attention_2" and self.dtype not in (torch.float16, torch.bfloat16):
+            raise ValueError("flash_attention_2 requires float16 or bfloat16")
 
         assert self.min_pixels is None or self.min_pixels >= MIN_PIXELS
         assert self.max_pixels is None or self.max_pixels <= MAX_PIXELS
@@ -122,6 +126,7 @@ class DotsMOCRParser:
             padding=True,
             return_tensors="pt",
         )
+        inputs.pop("mm_token_type_ids", None)
 
         inputs = inputs.to(self.device)
 
@@ -291,9 +296,11 @@ class DotsMOCRParser:
             svg_content, has_svg = extract_svg_from_response(response)
             
             if has_svg:
+                svg_path = os.path.join(save_dir, f"{save_name}.svg")
+                with open(svg_path, "w", encoding="utf-8") as svg_file:
+                    svg_file.write(svg_content)
                 png_path = os.path.join(save_dir, f"{save_name}_rendered.png")
                 w, h = origin_image.size
-                tw, th = (1024, round(h * 1024 / w)) if w <= h else (round(w * 1024 / h), 1024)
                 success, error = svg_to_png(svg_content, png_path, width=w, height=h)
                                 
                 if success:
@@ -318,6 +325,8 @@ class DotsMOCRParser:
                 'layout_image_path': image_layout_path,
                 'md_content_path': md_file_path,
             })
+            if has_svg:
+                result['svg_content_path'] = svg_path
         else:
             image_layout_path = os.path.join(save_dir, f"{save_name}.jpg")
             origin_image.save(image_layout_path)
@@ -341,10 +350,12 @@ class DotsMOCRParser:
         result['file_path'] = input_path
         return [result]
         
-    def parse_pdf(self, input_path, filename, prompt_mode, save_dir):
+    def parse_pdf(self, input_path, filename, prompt_mode, save_dir, pages=None):
         print(f"loading pdf: {input_path}")
-        images_origin = load_images_from_pdf(input_path, dpi=self.dpi)
-        total_pages = len(images_origin)
+        pdf_pages = load_pdf_pages(input_path, dpi=self.dpi, page_ids=pages)
+        total_pages = len(pdf_pages)
+        if total_pages == 0:
+            raise ValueError("PDF contains no renderable selected pages")
         tasks = [
             {
                 "origin_image": image,
@@ -352,8 +363,8 @@ class DotsMOCRParser:
                 "save_dir": save_dir,
                 "save_name": filename,
                 "source":"pdf",
-                "page_idx": i,
-            } for i, image in enumerate(images_origin)
+                "page_idx": page_idx,
+            } for page_idx, image in pdf_pages
         ]
 
         def _execute_task(task_args):
@@ -380,7 +391,8 @@ class DotsMOCRParser:
         prompt_mode="prompt_layout_all_en",
         bbox=None,
         fitz_preprocess=False,
-        custom_prompt=None
+        custom_prompt=None,
+        pages=None,
         ):
         output_dir = output_dir or self.output_dir
         output_dir = os.path.abspath(output_dir)
@@ -389,7 +401,7 @@ class DotsMOCRParser:
         os.makedirs(save_dir, exist_ok=True)
 
         if file_ext == '.pdf':
-            results = self.parse_pdf(input_path, filename, prompt_mode, save_dir)
+            results = self.parse_pdf(input_path, filename, prompt_mode, save_dir, pages=pages)
         elif file_ext in image_extensions:
             results = self.parse_image(input_path, filename, prompt_mode, save_dir, bbox=bbox, fitz_preprocess=fitz_preprocess, custom_prompt=custom_prompt)
         else:
@@ -403,6 +415,18 @@ class DotsMOCRParser:
         return results
 
 
+def parse_pages(value):
+    pages = set()
+    for item in value.split(","):
+        bounds = item.strip().split("-", 1)
+        start = int(bounds[0])
+        end = int(bounds[-1])
+        if start < 1 or end < start:
+            raise argparse.ArgumentTypeError(f"invalid page range: {item}")
+        pages.update(range(start - 1, end))
+    return sorted(pages)
+
+
 
 def main():
     prompts = list(dict_promptmode_to_prompt.keys())
@@ -413,6 +437,10 @@ def main():
     parser.add_argument(
         "--input_path", type=str,
         help="Input PDF/image file path"
+    )
+    parser.add_argument(
+        "--pages", type=parse_pages, default=None,
+        help="1-based PDF pages, for example 14,17,28-35"
     )
     
     parser.add_argument(
@@ -511,6 +539,7 @@ def main():
         prompt_mode=args.prompt,
         bbox=args.bbox,
         fitz_preprocess=fitz_preprocess,
+        pages=args.pages,
         )
 
 

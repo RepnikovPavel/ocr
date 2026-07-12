@@ -8,7 +8,6 @@ try:
     from flash_attn import flash_attn_varlen_func
 except ImportError:
     flash_attn_varlen_func = None
-    print("error: could not import flash attention")
 # from flash_attn import flash_attn_varlen_func
 from torch.nn import LayerNorm
 from transformers.modeling_utils import PreTrainedModel
@@ -132,6 +131,8 @@ class VisionAttention(nn.Module):
 class VisionFlashAttention2(nn.Module):
     def __init__(self, config, dim: int, num_heads: int = 16, bias=True) -> None:
         super().__init__()
+        if flash_attn_varlen_func is None:
+            raise ImportError("flash-attn is required for flash_attention_2")
         self.num_heads = num_heads
         self.qkv = nn.Linear(dim, dim * 3, bias=bias)
         self.proj = nn.Linear(dim, dim, bias=bias)

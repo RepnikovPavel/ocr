@@ -94,29 +94,24 @@ def fitz_doc_to_image(doc, target_dpi=200, origin_dpi=None) -> dict:
     return image
 
 
-def load_images_from_pdf(pdf_file, dpi=200, start_page_id=0, end_page_id=None) -> list:
-    images = []
+def load_pdf_pages(pdf_file, dpi=200, page_ids=None) -> list:
+    pages = []
     with fitz.open(pdf_file) as doc:
-        pdf_page_num = doc.page_count
-        end_page_id = (
-            end_page_id
-            if end_page_id is not None and end_page_id >= 0
-            else pdf_page_num - 1
-        )
-        if end_page_id > pdf_page_num - 1:
-            print('end_page_id is out of range, use images length')
-            end_page_id = pdf_page_num - 1
+        indices = range(doc.page_count) if page_ids is None else page_ids
+        for index in indices:
+            if index < 0 or index >= doc.page_count:
+                raise ValueError(f"PDF page {index + 1} is out of range 1..{doc.page_count}")
+            page = doc[index]
+            is_safe, reason = is_page_safe_to_render(page)
+            if not is_safe:
+                raise ValueError(f"PDF page {index + 1} is not safe to render: {reason}")
+            image = fitz_doc_to_image(page, target_dpi=dpi)
+            if image is not None:
+                pages.append((index, image))
+    return pages
 
-        for index in range(0, doc.page_count):
-            if start_page_id <= index <= end_page_id:
-                page = doc[index]
-                is_safe, reason = is_page_safe_to_render(page)
-                if not is_safe:
-                    print(f"pdf page {index} is not safe to render, skip")
-                    return []
-                img = fitz_doc_to_image(page, target_dpi=dpi)
-                if img is None:
-                    print(f"pdf page {index} is empty, skip")
-                    continue
-                images.append(img)
-    return images
+
+def load_images_from_pdf(pdf_file, dpi=200, start_page_id=0, end_page_id=None) -> list:
+    with fitz.open(pdf_file) as doc:
+        last_page_id = doc.page_count - 1 if end_page_id is None or end_page_id < 0 else min(end_page_id, doc.page_count - 1)
+    return [image for _, image in load_pdf_pages(pdf_file, dpi, range(start_page_id, last_page_id + 1))]

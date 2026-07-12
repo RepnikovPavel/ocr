@@ -72,6 +72,7 @@ class DotsOCRForCausalLM(Qwen2ForCausalLM):
         image_grid_thw: Optional[torch.FloatTensor] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        mm_token_type_ids: Optional[torch.LongTensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         labels: Optional[torch.LongTensor] = None,
