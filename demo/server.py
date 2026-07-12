@@ -94,6 +94,7 @@ def get_parser():
                 attn_implementation="sdpa",
                 device="auto",
                 dtype="bfloat16",
+                max_pixels=2_500_000,  # lower than default to reduce VRAM for vision features on 16GB GPUs
             )
             print(f"[demo] Model loaded in {time.time() - t0:.1f}s (device_map=auto for 32GB parallel)")
     return PARSER
