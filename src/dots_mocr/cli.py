@@ -88,8 +88,8 @@ class DotsMOCRParser:
             config=config,
             attn_implementation=self.attn_implementation,
             torch_dtype=torch.bfloat16,
-            device_map="balanced",  # balanced layer split across GPUs for model parallel (half layers approx on each)
-            max_memory={0: "14GiB", 1: "14GiB"},
+            device_map="auto",
+            max_memory={0: "14GiB", 1: "14GiB"},  # encourage split for model parallel while keeping ops consistent
             low_cpu_mem_usage=True,
             local_files_only=True,
             trust_remote_code=False,
