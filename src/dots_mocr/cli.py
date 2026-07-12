@@ -88,13 +88,39 @@ class DotsMOCRParser:
             config=config,
             attn_implementation=self.attn_implementation,
             torch_dtype=torch.bfloat16,
-            device_map="auto",
-            max_memory={0: "14GiB", 1: "14GiB"},  # force proper layer split across 2x16GB for model parallel
+            device_map="balanced",  # balanced + manual below for true half/half layers
+            max_memory={0: "14GiB", 1: "14GiB"},
             low_cpu_mem_usage=True,
             local_files_only=True,
             trust_remote_code=False,
         )
         self.model.eval()
+
+        # Explicit half/half layer split for model parallel (as requested: first half layers GPU0, second half GPU1)
+        try:
+            if hasattr(self.model, 'model') and hasattr(self.model.model, 'layers'):
+                layers = self.model.model.layers
+                n = len(layers)
+                half = n // 2
+                for i, layer in enumerate(layers):
+                    dev = f'cuda:{0 if i < half else 1}'
+                    for p in layer.parameters(recurse=False):
+                        if p.device.type != 'cuda' or p.device.index != (0 if i < half else 1):
+                            p.data = p.data.to(dev)
+                    for b in layer.buffers(recurse=False):
+                        if b.device.type != 'cuda' or b.device.index != (0 if i < half else 1):
+                            b.data = b.data.to(dev)
+                # vision to GPU 0, lm_head to GPU 1
+                if hasattr(self.model, 'vision_tower'):
+                    for p in self.model.vision_tower.parameters():
+                        p.data = p.data.to('cuda:0')
+                if hasattr(self.model, 'lm_head'):
+                    for p in self.model.lm_head.parameters():
+                        p.data = p.data.to('cuda:1')
+                print(f"Explicit model parallel split: layers 0..{half-1} on GPU0, {half}..{n-1} on GPU1")
+        except Exception as e:
+            print(f"Explicit layer split partial: {e}")
+
         self.processor = AutoProcessor.from_pretrained(
             ckpt,
             local_files_only=True,

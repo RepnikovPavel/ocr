@@ -404,7 +404,7 @@ INDEX_HTML = r"""<!doctype html>
     .dropzone.drag { background: #1a2030; }
     .pages-list { max-height: 380px; overflow: auto; border: 1px solid #2a3040; border-radius: 8px; padding: 6px; background: #10141d; }
     .page-item { display: flex; align-items: center; gap: 8px; padding: 4px; margin: 2px 0; }
-    .page-item img { width: 52px; height: auto; border: 1px solid #2a3040; border-radius: 4px; }
+    .page-item img { width: 120px; height: auto; border: 1px solid #2a3040; border-radius: 4px; } /* larger for better document viewing on left */
     .result-card { border: 1px solid #2a3040; border-radius: 10px; padding: 10px; margin: 8px 0; background: #11151f; }
     .result-card h4 { margin: 0 0 6px; }
     img.thumb { max-width: 100%; border-radius: 4px; }
@@ -556,10 +556,10 @@ function renderPageList(thumbs, views, num) {
     const li = document.createElement('div');
     li.className = 'page-item';
     const checked = 'checked';
-    const thumb = thumbs[i] || '';
+    const displayImg = (views && views[i]) || thumbs[i] || '';  // use larger view image for better visibility of page content
     li.innerHTML = `
       <input type="checkbox" value="${i+1}" ${checked}>
-      <img src="${thumb}" alt="p${i+1}" style="cursor:pointer;">
+      <img src="${displayImg}" alt="p${i+1}" style="cursor:pointer;">
       <span>Page ${i+1}</span>
     `;
     // click on thumb or span to view
