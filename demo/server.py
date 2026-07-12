@@ -84,8 +84,9 @@ def get_parser():
             num_threads = int(os.environ.get("DEMO_NUM_THREADS", "4"))
             print(f"[demo] using num_thread={num_threads} for PDF parallelism (good for 100+ page docs)")
 
-            # Choose the GPU with the most free memory for the model (to maximize headroom for inference)
-            # This makes the demo usable even when other processes are running.
+            # Load the model on the GPU with the most free memory.
+            # This gives maximum headroom for the page inference and avoids OOM when other demos are running.
+            # (Full layer split "balanced"/"auto" for this model tends to put the bulk on one card anyway.)
             try:
                 import subprocess
                 out = subprocess.check_output(
@@ -95,7 +96,7 @@ def get_parser():
                 frees = [int(x.strip()) for x in out.strip().split('\n')]
                 best_idx = frees.index(max(frees))
                 dev = f"cuda:{best_idx}"
-                print(f"[demo] loading model on {dev} (most free: {max(frees)} MiB)")
+                print(f"[demo] loading model on {dev} (most free: {max(frees)} MiB) for headroom")
             except Exception:
                 dev = "cuda"
 
