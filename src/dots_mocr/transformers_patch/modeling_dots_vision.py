@@ -327,12 +327,14 @@ class DotsVisionTransformer(PreTrainedModel):
     def _init_weights(self, module):
         std = self.config.initializer_range
         if isinstance(module, (nn.Linear, nn.Conv3d)):
-            module.weight.data.normal_(mean=0.0, std=std)
-            if module.bias is not None:
+            if not getattr(module.weight, "_is_hf_initialized", False):
+                module.weight.data.normal_(mean=0.0, std=std)
+            if module.bias is not None and not getattr(module.bias, "_is_hf_initialized", False):
                 module.bias.data.zero_()
         elif isinstance(module, nn.Embedding):
-            module.weight.data.normal_(mean=0.0, std=std)
-            if module.padding_idx is not None:
+            if not getattr(module.weight, "_is_hf_initialized", False):
+                module.weight.data.normal_(mean=0.0, std=std)
+            if module.padding_idx is not None and not getattr(module.weight, "_is_hf_initialized", False):
                 module.weight.data[module.padding_idx].zero_()
 
     @property

@@ -10,6 +10,8 @@ def fix_svg(svg: str) -> str:
     
     # 2) 删除末尾残缺标签
     svg = re.sub(r'<[^>]*$', '', svg)
+    svg = re.sub(r'&(amp|lt|gt|quot|apos)$', r'&\1;', svg)
+    svg = re.sub(r'&(?:#[xX]?[0-9A-Fa-f]*|[A-Za-z][A-Za-z0-9]*)$', '', svg)
     
     # 3) 顺序扫描做栈匹配，补齐未闭合标签
     stack = []
