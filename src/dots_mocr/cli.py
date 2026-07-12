@@ -106,6 +106,28 @@ class DotsMOCRParser:
         )
         self.model.eval()
 
+        # Custom split for dots.mocr to achieve model parallel (vision on GPU0, LLM layers half/half)
+        # This gives ~32GB effective while keeping vision ops on single device (avoids cross-device errors)
+        if torch.cuda.device_count() >= 2:
+            try:
+                # vision tower entirely on GPU0 (convolutions etc. need same device)
+                if hasattr(self.model, 'vision_tower'):
+                    self.model.vision_tower.to('cuda:0')
+                # split the transformer layers
+                if hasattr(self.model, 'model') and hasattr(self.model.model, 'layers'):
+                    layers = self.model.model.layers
+                    n = len(layers)
+                    half = n // 2
+                    for i, layer in enumerate(layers):
+                        dev = 'cuda:0' if i < half else 'cuda:1'
+                        layer.to(dev)
+                    print(f"Model parallel split: vision + layers 0-{half-1} on GPU0, layers {half}-{n-1} on GPU1")
+                # lm_head on GPU1
+                if hasattr(self.model, 'lm_head'):
+                    self.model.lm_head.to('cuda:1')
+            except Exception as e:
+                print(f"Custom split warning: {e}")
+
         self.processor = AutoProcessor.from_pretrained(
             ckpt,
             local_files_only=True,
