@@ -1,28 +1,73 @@
 {
-  "source_commit": "ac1ffa5",
+  "source_commit": "6e691b0",
   "runtime": {
     "base_image": "trtllm:1.3.0rc20",
+    "base_image_id": "sha256:bab380adf1f8b89e82f3df0f5afceaff3ba30407f05978eb3d2c73f6d5c1ef1f",
+    "result_image": "dots-mocr:trtllm-1.3.0rc20",
+    "result_image_id": "sha256:75545a12dd10821585bd57b8a733c33a919db5ce332d0582ea2ecc05ed22f98e",
+    "result_image_bytes": 40267374402,
     "python": "3.12.3",
     "torch": "2.11.0a0+eb65b36914.nv26.02",
     "transformers": "5.5.4",
     "tensorrt_llm": "1.3.0rc20",
+    "packaging": "25.0",
     "cuda_runtime": "13.1",
+    "driver": "580.159.04",
+    "driver_cuda": "13.0",
+    "cuda_minor_compatibility": true,
     "gpu": "NVIDIA GeForce RTX 4070 Ti"
   },
   "tests": {
+    "installed_package_source_hashes_match": true,
+    "pip_check": "pass",
     "unit": {
       "passed": 5,
-      "seconds": 8.21
-    }
+      "seconds": 8.32,
+      "source_bind_mount": false
+    },
+    "checkpoint_json": {
+      "dots_mocr_main": "ready",
+      "dots_mocr_svg_main": "ready"
+    },
+    "installed_image_checkpoint_smoke": {
+      "max_new_tokens": 1,
+      "source_bind_mount": false,
+      "dots_mocr": {
+        "cpu": {
+          "load_seconds": 2.8214398239997536,
+          "inference_seconds": 65.82762564899895
+        },
+        "gpu": {
+          "load_seconds": 2.5844210809991637,
+          "inference_seconds": 2.196903764999661
+        },
+        "cpu_gpu_prefix_match": true
+      },
+      "dots_mocr_svg": {
+        "cpu": {
+          "load_seconds": 2.7637658299991017,
+          "inference_seconds": 63.37052247599968
+        },
+        "gpu": {
+          "load_seconds": 2.5547396120000485,
+          "inference_seconds": 2.2077175340000394
+        },
+        "cpu_gpu_prefix_match": true
+      }
+    },
+    "secret_scan": "clean"
   },
   "benchmarks": {
     "input": "synthetic 1200x750 four-panel chart",
     "max_new_tokens": 8,
+    "purpose": "smoke and performance prefix",
     "dots_mocr": {
+      "checkpoint": "dots.mocr snapshots/fork",
       "cpu": {
         "dtype": "float32",
         "load_seconds": 2.7443658860011055,
         "inference_seconds": 70.09431382600087,
+        "total_seconds": 72.83868001200062,
         "output_tokens_per_second": 0.1141319397156645,
         "rss_peak_bytes": 19106852864
       },
@@ -30,17 +75,21 @@
         "dtype": "bfloat16",
         "load_seconds": 2.564248658998622,
         "inference_seconds": 2.314872209999521,
+        "total_seconds": 4.8791211289990315,
         "output_tokens_per_second": 3.4559143115730153,
         "rss_peak_bytes": 7082430464,
         "cuda_peak_memory_bytes": 8716612608
       },
-      "gpu_inference_speedup": 30.279992788895836
+      "gpu_inference_speedup": 30.279992788895836,
+      "gpu_total_speedup": 14.928647616285708
     },
     "dots_mocr_svg": {
+      "checkpoint": "dots.mocr-svg snapshots/main",
       "cpu": {
         "dtype": "float32",
         "load_seconds": 2.8695276110011037,
         "inference_seconds": 67.07043182900088,
+        "total_seconds": 69.93995971100048,
         "output_tokens_per_second": 0.11927759791969678,
         "rss_peak_bytes": 19105951744
       },
@@ -48,35 +97,90 @@
         "dtype": "bfloat16",
         "load_seconds": 2.6603933360001975,
         "inference_seconds": 2.332617793999816,
+        "total_seconds": 4.993011419999675,
         "output_tokens_per_second": 3.429623155828773,
         "rss_peak_bytes": 7083626496,
         "cuda_peak_memory_bytes": 8716035072
       },
-      "gpu_inference_speedup": 28.753288259022074
+      "gpu_inference_speedup": 28.753288259022074,
+      "gpu_total_speedup": 14.007570547676623
     }
   },
   "quality": {
     "geometry_svg": {
+      "artifact": "output/quality/geometry_svg_verified/geometry/geometry.svg",
+      "valid_xml": true,
       "input_size": [583, 550],
       "svg_bytes": 1113,
+      "elements": 19,
       "normalized_mae": 0.00986918,
       "psnr_db": 22.5716
     },
     "synthetic_svg": {
+      "artifact": "output/quality/synthetic_svg_verified/composite_chart/composite_chart.svg",
+      "valid_xml": true,
       "input_size": [1200, 750],
       "svg_bytes": 16395,
+      "elements": 169,
       "normalized_mae": 0.0434041,
-      "psnr_db": 15.5545
+      "psnr_db": 15.5545,
+      "known_differences": [
+        "North value is 83 instead of 84",
+        "Energy 12% sector is overlapped in the render"
+      ]
     },
     "diploma_dots_mocr": {
+      "source": "/mnt/nvme/ocr_data/DiplomaMasterDegree.pdf",
       "pdf_page": 28,
+      "artifact": "output/quality/diploma_dots/DiplomaMasterDegree/DiplomaMasterDegree_page_27.json",
+      "valid_json": true,
       "layout_elements": 9,
       "categories": {
         "Picture": 2,
         "Caption": 2,
         "Text": 4,
         "Page-footer": 1
-      }
+      },
+      "visual_result": "aligned graph regions, captions, text and footer"
+    },
+    "diploma_dots_mocr_svg_full_page": {
+      "source": "/mnt/nvme/ocr_data/DiplomaMasterDegree.pdf",
+      "pdf_page": 28,
+      "attempt_1": {
+        "generation_seconds": 122.72,
+        "valid_xml": false,
+        "result": "mismatched tspan tag"
+      },
+      "attempt_2": {
+        "generation_seconds": 136.76,
+        "valid_xml": true,
+        "elements": 104,
+        "nonwhite_pixel_ratio": 0.0,
+        "result": "blank render"
+      },
+      "verdict": "semantic failure"
+    },
+    "diploma_dots_mocr_svg_graph_1": {
+      "source_crop": "output/fixtures/diploma_page28_graph1.png",
+      "artifact": "output/quality/diploma_svg_graph1/diploma_page28_graph1/diploma_page28_graph1.svg",
+      "generation_total_seconds": 150.34,
+      "valid_xml": true,
+      "svg_bytes": 12277,
+      "elements": 76,
+      "normalized_mae": 0.246914,
+      "psnr_db": 7.689,
+      "result": "heatmap and color scale lost"
+    },
+    "diploma_dots_mocr_svg_graph_2": {
+      "source_crop": "output/fixtures/diploma_page28_graph2.png",
+      "artifact": "output/quality/diploma_svg_graph2/diploma_page28_graph2/diploma_page28_graph2.svg",
+      "generation_total_seconds": 151.30,
+      "valid_xml": false,
+      "recovered_for_diagnostics": true,
+      "recovered_elements": 137,
+      "recovered_normalized_mae": 0.126665,
+      "recovered_psnr_db": 10.652,
+      "result": "four panels replaced by unrelated arcs and points"
     }
   }
 }
