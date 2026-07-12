@@ -52,7 +52,17 @@ cd "$snapshot_dir"
 download() {
     local remote_name="$1"
     local local_name="${2:-$1}"
-    wget -c --show-progress --output-document="$local_name" "$base_url/$remote_name"
+    local temp
+    if [[ "$local_name" == *.safetensors ]]; then
+        wget -c --show-progress --output-document="$local_name" "$base_url/$remote_name"
+        return
+    fi
+    temp=$(mktemp ".${local_name//\//_}.XXXXXX")
+    if ! wget --show-progress --output-document="$temp" "$base_url/$remote_name"; then
+        rm -f "$temp"
+        return 1
+    fi
+    mv "$temp" "$local_name"
 }
 
 for file in "${files[@]}"; do
@@ -71,4 +81,6 @@ for file in "${required[@]}"; do
     fi
 done
 
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+python3 "$root/scripts/prepare_checkpoint.py" "$snapshot_dir" --in-place
 printf '%s\n' "$snapshot_dir"

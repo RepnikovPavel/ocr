@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 RUN="$ROOT/docker/run.sh"
-CKPT=${CKPT:-${DOTS_MOCR_CKPT:-/mnt/nvme/huggingface/models--rednote-hilab--dots.mocr/snapshots/fork}}
+CKPT=${CKPT:-${DOTS_MOCR_CKPT:-/mnt/nvme/huggingface/models--rednote-hilab--dots.mocr/snapshots/main}}
 MAX_NEW_TOKENS=${MAX_NEW_TOKENS:-256}
 MAX_PIXELS=${MAX_PIXELS:-1000000}
 RESULT_DIR=${RESULT_DIR:-/workspace/ocr/output/benchmarks/dots_mocr_cpu}
