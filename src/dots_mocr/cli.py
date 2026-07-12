@@ -89,6 +89,8 @@ class DotsMOCRParser:
             attn_implementation=self.attn_implementation,
             torch_dtype=torch.bfloat16,
             device_map="auto",
+            max_memory={0: "14GiB", 1: "14GiB"},  # force proper layer split across 2x16GB for model parallel
+            low_cpu_mem_usage=True,
             local_files_only=True,
             trust_remote_code=False,
         )

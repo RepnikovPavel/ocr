@@ -203,28 +203,45 @@ async def api_prepare(file: UploadFile = File(...)):
     num_pages = 1
     thumb_urls = []
 
+    view_urls = []
     if is_pdf and fitz is not None:
         try:
             doc = fitz.open(str(input_path))
             num_pages = len(doc)
             for i in range(num_pages):
                 page = doc[i]
-                pix = page.get_pixmap(dpi=72)
+                # small thumbs for list
+                pix = page.get_pixmap(dpi=60)
                 tp = job_dir / f"thumb_{i:03d}.jpg"
                 pix.save(str(tp))
                 thumb_urls.append(f"/files/{job_id}/thumb_{i:03d}.jpg")
+
+                # larger view images for proper PDF viewer on left
+                pix = page.get_pixmap(dpi=120)
+                vp = job_dir / f"view_{i:03d}.jpg"
+                pix.save(str(vp))
+                view_urls.append(f"/files/{job_id}/view_{i:03d}.jpg")
             doc.close()
         except Exception as e:
-            print(f"thumb error: {e}")
+            print(f"thumb/view error: {e}")
     else:
         # image as single "page"
         try:
             from PIL import Image as PILImage
             im = PILImage.open(input_path)
-            im.thumbnail((300, 400))
+            # thumb
+            im_thumb = im.copy()
+            im_thumb.thumbnail((300, 400))
             tp = job_dir / "thumb_000.jpg"
-            im.save(tp, "JPEG")
+            im_thumb.save(tp, "JPEG")
             thumb_urls = [f"/files/{job_id}/thumb_000.jpg"]
+
+            # view
+            im_view = im.copy()
+            im_view.thumbnail((900, 1200))
+            vp = job_dir / "view_000.jpg"
+            im_view.save(vp, "JPEG")
+            view_urls = [f"/files/{job_id}/view_000.jpg"]
         except Exception:
             pass
 
@@ -234,6 +251,7 @@ async def api_prepare(file: UploadFile = File(...)):
         "is_pdf": is_pdf,
         "num_pages": num_pages,
         "thumb_urls": thumb_urls,
+        "view_urls": view_urls,
     }
 
 
@@ -425,6 +443,12 @@ INDEX_HTML = r"""<!doctype html>
           <input id="pages-input" type="text" value="all" style="width:100%;padding:6px;background:#10141d;border:1px solid #3a4255;color:#e6e8f0;border-radius:6px;">
         </div>
 
+        <!-- Proper PDF viewer on left -->
+        <div id="pdf-viewer" style="border:1px solid #2a3040; border-radius:8px; padding:8px; background:#10141d; margin:8px 0; min-height:280px; display:flex; align-items:center; justify-content:center;">
+          <img id="current-page-img" style="max-width:100%; max-height:260px; display:none; border:1px solid #2a3040;" />
+          <span id="viewer-placeholder" class="muted">После загрузки файла здесь будет крупный просмотр выбранной страницы</span>
+        </div>
+
         <div id="pages-list" class="pages-list" style="display:none;"></div>
 
         <div class="row" style="margin-top:8px;">
@@ -507,9 +531,26 @@ fetch('/api/status').then(r => r.json()).then(s => {
   });
 }).catch(e => statusEl.textContent = 'Статус: ' + e);
 
-function renderPageList(thumbs, num) {
+let currentViewUrls = [];
+let currentPageIndex = 0; // 0-based
+
+function showPageInViewer(idx) {
+  currentPageIndex = idx;
+  const img = document.getElementById('current-page-img');
+  const placeholder = document.getElementById('viewer-placeholder');
+  const viewUrl = currentViewUrls[idx];
+  if (viewUrl) {
+    img.src = viewUrl;
+    img.style.display = 'block';
+    placeholder.style.display = 'none';
+  }
+}
+
+function renderPageList(thumbs, views, num) {
+  currentViewUrls = views || thumbs || [];
   pagesList.innerHTML = '';
   pagesList.style.display = 'block';
+
   for (let i = 0; i < num; i++) {
     const li = document.createElement('div');
     li.className = 'page-item';
@@ -517,10 +558,22 @@ function renderPageList(thumbs, num) {
     const thumb = thumbs[i] || '';
     li.innerHTML = `
       <input type="checkbox" value="${i+1}" ${checked}>
-      <img src="${thumb}" alt="p${i+1}">
+      <img src="${thumb}" alt="p${i+1}" style="cursor:pointer;">
       <span>Page ${i+1}</span>
     `;
+    // click on thumb or span to view
+    const imgEl = li.querySelector('img');
+    const spanEl = li.querySelector('span');
+    const clickHandler = () => showPageInViewer(i);
+    if (imgEl) imgEl.onclick = clickHandler;
+    if (spanEl) spanEl.onclick = clickHandler;
+
     pagesList.appendChild(li);
+  }
+
+  // show first page by default in viewer
+  if (num > 0) {
+    setTimeout(() => showPageInViewer(0), 50);
   }
 }
 
@@ -551,7 +604,8 @@ async function handleFile(file) {
     currentJobId = data.job_id;
     currentNumPages = data.num_pages || 1;
     currentThumbs = data.thumb_urls || [];
-    renderPageList(currentThumbs, currentNumPages);
+    const views = data.view_urls || data.thumb_urls || [];
+    renderPageList(currentThumbs, views, currentNumPages);
     parseBtn.disabled = false;
     resultsEl.innerHTML = `<span class="muted">Готово. Выберите страницы слева и нажмите «Распознать».</span>`;
   } catch (e) {
@@ -609,8 +663,9 @@ function renderResults(data) {
   const spp = data.sec_per_page || (data.elapsed_sec / Math.max(1, data.num_pages || 1));
   let html = `<div class="muted">job ${data.job_id} • ${data.num_pages} стр. • ${data.elapsed_sec}s • <b>~${spp}s/стр.</b></div>`;
   (data.results || []).forEach((r, i) => {
+    const pageNo = r.page_no ?? (i+1);
     html += `<div class="result-card">`;
-    html += `<h4>Страница ${r.page_no ?? (i+1)}</h4>`;
+    html += `<h4>Страница ${pageNo} <button class="secondary" style="font-size:0.8em;padding:2px 6px;margin-left:8px;" onclick="showPageInViewer(${pageNo-1})">показать в просмотрщике</button></h4>`;
     if (r.layout_image_url) html += `<img class="thumb" src="${r.layout_image_url}" alt="layout">`;
     if (r.md_content_url) {
       html += `<div><strong>Результат</strong> <a href="${r.md_content_url}" target="_blank">скачать .md</a></div>`;
