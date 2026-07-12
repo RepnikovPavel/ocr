@@ -111,7 +111,7 @@ def get_parser():
                 attn_implementation="sdpa",
                 device=dev,
                 dtype="bfloat16",
-                max_pixels=2_500_000,  # lower than default to reduce VRAM for vision features on 16GB GPUs
+                max_pixels=1_500_000,  # even lower to fit 1 page inference on 16GB cards after weights (~14GB)
             )
             print(f"[demo] Model loaded in {time.time() - t0:.1f}s (device_map=auto for 32GB parallel)")
     return PARSER
@@ -478,7 +478,7 @@ INDEX_HTML = r"""<!doctype html>
         <div class="row" style="margin-top:6px;">
           <label>Temp <input id="temperature" type="number" value="0.1" step="0.05" min="0" max="2" style="width:70px;"></label>
           <label>Max tok <input id="max_tokens" type="number" value="16384" style="width:90px;"></label>
-          <label>DPI <input id="dpi" type="number" value="200" style="width:70px;"></label>
+          <label>DPI <input id="dpi" type="number" value="100" style="width:70px;"></label> (lower = less memory for large pages)
         </div>
 
         <div style="margin-top:10px;">
