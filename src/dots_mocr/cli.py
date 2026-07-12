@@ -84,9 +84,13 @@ class DotsMOCRParser:
         )
         config.vision_config.attn_implementation = self.attn_implementation
 
-        # Model parallel using auto + max_memory (lets HF split layers across the two GPUs)
-        device_map = "auto"
-        print(f"[parser] using device_map for model parallel: {device_map}")
+        # If the demo passed a specific device (to pick the free GPU), use single device map for headroom.
+        # Otherwise use auto for model parallel split.
+        if isinstance(self.device, str) and self.device.startswith('cuda:'):
+            device_map = {"": self.device}
+        else:
+            device_map = "auto"
+        print(f"[parser] using device_map: {device_map}")
 
         self.model = AutoModelForCausalLM.from_pretrained(
             ckpt,
@@ -99,28 +103,6 @@ class DotsMOCRParser:
             trust_remote_code=False,
         )
         self.model.eval()
-
-        # Custom split for dots.mocr to achieve model parallel (vision on GPU0, LLM layers half/half)
-        # This gives ~32GB effective while keeping vision ops on single device (avoids cross-device errors)
-        if torch.cuda.device_count() >= 2:
-            try:
-                # vision tower entirely on GPU0 (convolutions etc. need same device)
-                if hasattr(self.model, 'vision_tower'):
-                    self.model.vision_tower.to('cuda:0')
-                # split the transformer layers
-                if hasattr(self.model, 'model') and hasattr(self.model.model, 'layers'):
-                    layers = self.model.model.layers
-                    n = len(layers)
-                    half = n // 2
-                    for i, layer in enumerate(layers):
-                        dev = 'cuda:0' if i < half else 'cuda:1'
-                        layer.to(dev)
-                    print(f"Model parallel split: vision + layers 0-{half-1} on GPU0, layers {half}-{n-1} on GPU1")
-                # lm_head on GPU1
-                if hasattr(self.model, 'lm_head'):
-                    self.model.lm_head.to('cuda:1')
-            except Exception as e:
-                print(f"Custom split warning: {e}")
 
         self.processor = AutoProcessor.from_pretrained(
             ckpt,
