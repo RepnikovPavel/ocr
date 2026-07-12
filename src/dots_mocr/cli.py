@@ -84,9 +84,8 @@ class DotsMOCRParser:
         )
         config.vision_config.attn_implementation = self.attn_implementation
 
-        # Model parallel: vision on GPU0, the heavy LLM on GPU1 (full 16GB headroom for page inference)
-        # This uses both cards while keeping vision ops consistent on one device.
-        device_map = {"vision_tower": 0, "": 1}
+        # Model parallel using auto + max_memory (lets HF split layers across the two GPUs)
+        device_map = "auto"
         print(f"[parser] using device_map for model parallel: {device_map}")
 
         self.model = AutoModelForCausalLM.from_pretrained(
