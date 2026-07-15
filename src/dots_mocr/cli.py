@@ -64,6 +64,9 @@ class DotsMOCRParser:
         # One HF model instance must not run concurrent generate() calls
         # (parse_pdf may use a ThreadPool for rendering/post-processing).
         self._generate_lock = threading.Lock()
+        # When set, generation stops at the next decoding step (used by the
+        # demo to cancel a running task without unloading the model).
+        self.abort_event = None
 
         self._load_model(ckpt)
         print(f"Model loaded from {ckpt}, device={self.device}, dtype={self.dtype}, num_thread={self.num_thread}")
@@ -161,6 +164,16 @@ class DotsMOCRParser:
                 temperature=temperature,
                 top_p=self.top_p,
             )
+        if self.abort_event is not None:
+            from transformers import StoppingCriteria, StoppingCriteriaList
+
+            abort_event = self.abort_event
+
+            class _AbortCriteria(StoppingCriteria):
+                def __call__(self, input_ids, scores, **kwargs):
+                    return abort_event.is_set()
+
+            generation_kwargs["stopping_criteria"] = StoppingCriteriaList([_AbortCriteria()])
         with self._generate_lock, torch.inference_mode():
             generated_ids = self.model.generate(**inputs, **generation_kwargs)
         generated_ids_trimmed = [
@@ -225,7 +238,10 @@ class DotsMOCRParser:
         }
         if source == 'pdf':
             save_name = f"{save_name}_page_{page_idx}"
-        if prompt_mode in ['prompt_layout_all_en', 'prompt_layout_only_en', 'prompt_grounding_ocr', 'prompt_web_parsing']:
+        # prompt_grounding_ocr returns plain text, not layout JSON: routing it
+        # through the JSON pipeline (as upstream does) yields an empty markdown
+        # artifact because OutputCleaner finds no cells in plain text.
+        if prompt_mode in ['prompt_layout_all_en', 'prompt_layout_only_en', 'prompt_web_parsing']:
             cells, filtered = post_process_output(
                 response, 
                 prompt_mode, 
