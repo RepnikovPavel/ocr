@@ -1,0 +1,491 @@
+{
+  "label": "multi_page_1gpu",
+  "config": {
+    "ckpt": "/mnt/data2/huggingface/models--rednote-hilab--dots.mocr/snapshots/main",
+    "pdf": "/mnt/data2/PMRepnikov/fable_ocr/data/mobilenetv3.pdf",
+    "prompt": "prompt_layout_all_en",
+    "dpi": 150,
+    "max_new_tokens": 8192,
+    "max_pixels": null,
+    "batch_size": 1,
+    "gpus": [
+      0
+    ],
+    "pages": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ]
+  },
+  "aggregate": {
+    "num_pages": 11,
+    "num_gpus": 1,
+    "wall_seconds": 506.58,
+    "work_seconds_max": 489.58,
+    "seconds_per_page_wall": 46.05,
+    "seconds_per_page_work": 44.51,
+    "seconds_per_page_latency_mean": 44.41,
+    "seconds_per_page_latency_median": 41.47,
+    "pages_per_minute": 1.35,
+    "output_tokens_total": 23311,
+    "output_tokens_per_second_aggregate": 47.61,
+    "ttft_seconds_by_gpu": {
+      "0": 3.505
+    },
+    "model_load_seconds_by_gpu": {
+      "0": 2.9
+    },
+    "valid_json_pages": 11,
+    "checked_json_pages": 11,
+    "gpu_stats_inference_window": {
+      "0": {
+        "util_pct": {
+          "mean": 38.6,
+          "max": 100.0,
+          "samples": 905
+        },
+        "memory_used_mb": {
+          "mean": 19393.0,
+          "max": 19393.0,
+          "samples": 905
+        },
+        "power_w": {
+          "mean": 149.4,
+          "max": 369.05,
+          "samples": 905
+        }
+      },
+      "1": {
+        "util_pct": {
+          "mean": 0.0,
+          "max": 0.0,
+          "samples": 905
+        },
+        "memory_used_mb": {
+          "mean": 18.0,
+          "max": 18.0,
+          "samples": 905
+        },
+        "power_w": {
+          "mean": 31.4,
+          "max": 33.05,
+          "samples": 905
+        }
+      }
+    },
+    "gpu_stats_full_run": {
+      "0": {
+        "util_pct": {
+          "mean": 38.8,
+          "max": 100.0,
+          "samples": 936
+        },
+        "memory_used_mb": {
+          "mean": 19088.0,
+          "max": 19393.0,
+          "samples": 936
+        },
+        "power_w": {
+          "mean": 150.6,
+          "max": 369.05,
+          "samples": 936
+        }
+      },
+      "1": {
+        "util_pct": {
+          "mean": 0.0,
+          "max": 0.0,
+          "samples": 936
+        },
+        "memory_used_mb": {
+          "mean": 18.0,
+          "max": 18.0,
+          "samples": 936
+        },
+        "power_w": {
+          "mean": 31.4,
+          "max": 33.05,
+          "samples": 936
+        }
+      }
+    }
+  },
+  "workers": {
+    "0": {
+      "visible_devices": "0",
+      "pages": [
+        {
+          "page_no": 0,
+          "image_width": 1275,
+          "image_height": 1650,
+          "batch_size": 1,
+          "preprocess_seconds": 0.10108546097762883,
+          "generate_seconds": 28.317839469993487,
+          "input_tokens": 2930,
+          "output_tokens": 1277,
+          "output_tokens_per_second": 45.09524822164315,
+          "batch_output_tokens_per_second": 45.09524822164315,
+          "valid_json": true,
+          "num_cells": 14,
+          "response_chars": 4326,
+          "gpu": 0
+        },
+        {
+          "page_no": 1,
+          "image_width": 1275,
+          "image_height": 1650,
+          "batch_size": 1,
+          "preprocess_seconds": 0.0959693999029696,
+          "generate_seconds": 33.365672959946096,
+          "input_tokens": 2930,
+          "output_tokens": 1549,
+          "output_tokens_per_second": 46.42495902478876,
+          "batch_output_tokens_per_second": 46.42495902478876,
+          "valid_json": true,
+          "num_cells": 13,
+          "response_chars": 6447,
+          "gpu": 0
+        },
+        {
+          "page_no": 2,
+          "image_width": 1275,
+          "image_height": 1650,
+          "batch_size": 1,
+          "preprocess_seconds": 0.17034005583263934,
+          "generate_seconds": 33.833557188976556,
+          "input_tokens": 2930,
+          "output_tokens": 1555,
+          "output_tokens_per_second": 45.96028704030685,
+          "batch_output_tokens_per_second": 45.96028704030685,
+          "valid_json": true,
+          "num_cells": 18,
+          "response_chars": 5400,
+          "gpu": 0
+        },
+        {
+          "page_no": 3,
+          "image_width": 1275,
+          "image_height": 1650,
+          "batch_size": 1,
+          "preprocess_seconds": 0.08954169997014105,
+          "generate_seconds": 36.40973534388468,
+          "input_tokens": 2930,
+          "output_tokens": 1684,
+          "output_tokens_per_second": 46.25136612762669,
+          "batch_output_tokens_per_second": 46.25136612762669,
+          "valid_json": true,
+          "num_cells": 19,
+          "response_chars": 6077,
+          "gpu": 0
+        },
+        {
+          "page_no": 4,
+          "image_width": 1275,
+          "image_height": 1650,
+          "batch_size": 1,
+          "preprocess_seconds": 0.08868519496172667,
+          "generate_seconds": 77.76679960195906,
+          "input_tokens": 2930,
+          "output_tokens": 3817,
+          "output_tokens_per_second": 49.08264220125942,
+          "batch_output_tokens_per_second": 49.08264220125942,
+          "valid_json": true,
+          "num_cells": 20,
+          "response_chars": 8494,
+          "gpu": 0
+        },
+        {
+          "page_no": 5,
+          "image_width": 1275,
+          "image_height": 1650,
+          "batch_size": 1,
+          "preprocess_seconds": 0.08929011411964893,
+          "generate_seconds": 53.78590421797708,
+          "input_tokens": 2930,
+          "output_tokens": 2616,
+          "output_tokens_per_second": 48.637278447494126,
+          "batch_output_tokens_per_second": 48.637278447494126,
+          "valid_json": true,
+          "num_cells": 19,
+          "response_chars": 6484,
+          "gpu": 0
+        },
+        {
+          "page_no": 6,
+          "image_width": 1275,
+          "image_height": 1650,
+          "batch_size": 1,
+          "preprocess_seconds": 0.09913383005186915,
+          "generate_seconds": 41.46599185396917,
+          "input_tokens": 2930,
+          "output_tokens": 1976,
+          "output_tokens_per_second": 47.653508613971695,
+          "batch_output_tokens_per_second": 47.653508613971695,
+          "valid_json": true,
+          "num_cells": 16,
+          "response_chars": 5398,
+          "gpu": 0
+        },
+        {
+          "page_no": 7,
+          "image_width": 1275,
+          "image_height": 1650,
+          "batch_size": 1,
+          "preprocess_seconds": 0.08744893013499677,
+          "generate_seconds": 65.84538246784359,
+          "input_tokens": 2930,
+          "output_tokens": 3250,
+          "output_tokens_per_second": 49.35805485809392,
+          "batch_output_tokens_per_second": 49.35805485809392,
+          "valid_json": true,
+          "num_cells": 12,
+          "response_chars": 8219,
+          "gpu": 0
+        },
+        {
+          "page_no": 8,
+          "image_width": 1275,
+          "image_height": 1650,
+          "batch_size": 1,
+          "preprocess_seconds": 0.09683493012562394,
+          "generate_seconds": 42.0554933489766,
+          "input_tokens": 2930,
+          "output_tokens": 2010,
+          "output_tokens_per_second": 47.793994076374624,
+          "batch_output_tokens_per_second": 47.793994076374624,
+          "valid_json": true,
+          "num_cells": 3,
+          "response_chars": 6025,
+          "gpu": 0
+        },
+        {
+          "page_no": 9,
+          "image_width": 1275,
+          "image_height": 1650,
+          "batch_size": 1,
+          "preprocess_seconds": 0.09115869901143014,
+          "generate_seconds": 44.321076937019825,
+          "input_tokens": 2930,
+          "output_tokens": 2125,
+          "output_tokens_per_second": 47.94558586695945,
+          "batch_output_tokens_per_second": 47.94558586695945,
+          "valid_json": true,
+          "num_cells": 2,
+          "response_chars": 5986,
+          "gpu": 0
+        },
+        {
+          "page_no": 10,
+          "image_width": 1275,
+          "image_height": 1650,
+          "batch_size": 1,
+          "preprocess_seconds": 0.0893961580004543,
+          "generate_seconds": 31.291215697070584,
+          "input_tokens": 2930,
+          "output_tokens": 1452,
+          "output_tokens_per_second": 46.4027992410641,
+          "batch_output_tokens_per_second": 46.4027992410641,
+          "valid_json": true,
+          "num_cells": 5,
+          "response_chars": 2779,
+          "gpu": 0
+        }
+      ],
+      "model_load_seconds": 2.942878271918744,
+      "render_seconds": 0.2292499199975282,
+      "ttft_seconds": 3.504918171092868,
+      "ttft_input_tokens": 2930,
+      "work_start_time": 1784127421.1440833,
+      "work_seconds": 489.576386337867,
+      "work_end_time": 1784127910.720474,
+      "cuda_peak_memory_bytes": 19761750016,
+      "device_name": "NVIDIA GeForce RTX 4090"
+    }
+  },
+  "pages_detail": [
+    {
+      "page_no": 0,
+      "image_width": 1275,
+      "image_height": 1650,
+      "batch_size": 1,
+      "preprocess_seconds": 0.10108546097762883,
+      "generate_seconds": 28.317839469993487,
+      "input_tokens": 2930,
+      "output_tokens": 1277,
+      "output_tokens_per_second": 45.09524822164315,
+      "batch_output_tokens_per_second": 45.09524822164315,
+      "valid_json": true,
+      "num_cells": 14,
+      "response_chars": 4326,
+      "gpu": 0
+    },
+    {
+      "page_no": 1,
+      "image_width": 1275,
+      "image_height": 1650,
+      "batch_size": 1,
+      "preprocess_seconds": 0.0959693999029696,
+      "generate_seconds": 33.365672959946096,
+      "input_tokens": 2930,
+      "output_tokens": 1549,
+      "output_tokens_per_second": 46.42495902478876,
+      "batch_output_tokens_per_second": 46.42495902478876,
+      "valid_json": true,
+      "num_cells": 13,
+      "response_chars": 6447,
+      "gpu": 0
+    },
+    {
+      "page_no": 2,
+      "image_width": 1275,
+      "image_height": 1650,
+      "batch_size": 1,
+      "preprocess_seconds": 0.17034005583263934,
+      "generate_seconds": 33.833557188976556,
+      "input_tokens": 2930,
+      "output_tokens": 1555,
+      "output_tokens_per_second": 45.96028704030685,
+      "batch_output_tokens_per_second": 45.96028704030685,
+      "valid_json": true,
+      "num_cells": 18,
+      "response_chars": 5400,
+      "gpu": 0
+    },
+    {
+      "page_no": 3,
+      "image_width": 1275,
+      "image_height": 1650,
+      "batch_size": 1,
+      "preprocess_seconds": 0.08954169997014105,
+      "generate_seconds": 36.40973534388468,
+      "input_tokens": 2930,
+      "output_tokens": 1684,
+      "output_tokens_per_second": 46.25136612762669,
+      "batch_output_tokens_per_second": 46.25136612762669,
+      "valid_json": true,
+      "num_cells": 19,
+      "response_chars": 6077,
+      "gpu": 0
+    },
+    {
+      "page_no": 4,
+      "image_width": 1275,
+      "image_height": 1650,
+      "batch_size": 1,
+      "preprocess_seconds": 0.08868519496172667,
+      "generate_seconds": 77.76679960195906,
+      "input_tokens": 2930,
+      "output_tokens": 3817,
+      "output_tokens_per_second": 49.08264220125942,
+      "batch_output_tokens_per_second": 49.08264220125942,
+      "valid_json": true,
+      "num_cells": 20,
+      "response_chars": 8494,
+      "gpu": 0
+    },
+    {
+      "page_no": 5,
+      "image_width": 1275,
+      "image_height": 1650,
+      "batch_size": 1,
+      "preprocess_seconds": 0.08929011411964893,
+      "generate_seconds": 53.78590421797708,
+      "input_tokens": 2930,
+      "output_tokens": 2616,
+      "output_tokens_per_second": 48.637278447494126,
+      "batch_output_tokens_per_second": 48.637278447494126,
+      "valid_json": true,
+      "num_cells": 19,
+      "response_chars": 6484,
+      "gpu": 0
+    },
+    {
+      "page_no": 6,
+      "image_width": 1275,
+      "image_height": 1650,
+      "batch_size": 1,
+      "preprocess_seconds": 0.09913383005186915,
+      "generate_seconds": 41.46599185396917,
+      "input_tokens": 2930,
+      "output_tokens": 1976,
+      "output_tokens_per_second": 47.653508613971695,
+      "batch_output_tokens_per_second": 47.653508613971695,
+      "valid_json": true,
+      "num_cells": 16,
+      "response_chars": 5398,
+      "gpu": 0
+    },
+    {
+      "page_no": 7,
+      "image_width": 1275,
+      "image_height": 1650,
+      "batch_size": 1,
+      "preprocess_seconds": 0.08744893013499677,
+      "generate_seconds": 65.84538246784359,
+      "input_tokens": 2930,
+      "output_tokens": 3250,
+      "output_tokens_per_second": 49.35805485809392,
+      "batch_output_tokens_per_second": 49.35805485809392,
+      "valid_json": true,
+      "num_cells": 12,
+      "response_chars": 8219,
+      "gpu": 0
+    },
+    {
+      "page_no": 8,
+      "image_width": 1275,
+      "image_height": 1650,
+      "batch_size": 1,
+      "preprocess_seconds": 0.09683493012562394,
+      "generate_seconds": 42.0554933489766,
+      "input_tokens": 2930,
+      "output_tokens": 2010,
+      "output_tokens_per_second": 47.793994076374624,
+      "batch_output_tokens_per_second": 47.793994076374624,
+      "valid_json": true,
+      "num_cells": 3,
+      "response_chars": 6025,
+      "gpu": 0
+    },
+    {
+      "page_no": 9,
+      "image_width": 1275,
+      "image_height": 1650,
+      "batch_size": 1,
+      "preprocess_seconds": 0.09115869901143014,
+      "generate_seconds": 44.321076937019825,
+      "input_tokens": 2930,
+      "output_tokens": 2125,
+      "output_tokens_per_second": 47.94558586695945,
+      "batch_output_tokens_per_second": 47.94558586695945,
+      "valid_json": true,
+      "num_cells": 2,
+      "response_chars": 5986,
+      "gpu": 0
+    },
+    {
+      "page_no": 10,
+      "image_width": 1275,
+      "image_height": 1650,
+      "batch_size": 1,
+      "preprocess_seconds": 0.0893961580004543,
+      "generate_seconds": 31.291215697070584,
+      "input_tokens": 2930,
+      "output_tokens": 1452,
+      "output_tokens_per_second": 46.4027992410641,
+      "batch_output_tokens_per_second": 46.4027992410641,
+      "valid_json": true,
+      "num_cells": 5,
+      "response_chars": 2779,
+      "gpu": 0
+    }
+  ]
+}

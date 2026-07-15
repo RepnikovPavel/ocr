@@ -1,0 +1,161 @@
+{
+  "label": "single_page_1gpu",
+  "config": {
+    "ckpt": "/mnt/data2/huggingface/models--rednote-hilab--dots.mocr/snapshots/main",
+    "pdf": "/mnt/data2/PMRepnikov/fable_ocr/data/mobilenetv3.pdf",
+    "prompt": "prompt_layout_all_en",
+    "dpi": 150,
+    "max_new_tokens": 8192,
+    "max_pixels": null,
+    "batch_size": 1,
+    "gpus": [
+      0
+    ],
+    "pages": [
+      0
+    ]
+  },
+  "aggregate": {
+    "num_pages": 1,
+    "num_gpus": 1,
+    "wall_seconds": 46.11,
+    "work_seconds_max": 29.13,
+    "seconds_per_page_wall": 46.11,
+    "seconds_per_page_work": 29.13,
+    "seconds_per_page_latency_mean": 28.98,
+    "seconds_per_page_latency_median": 28.98,
+    "pages_per_minute": 2.06,
+    "output_tokens_total": 1277,
+    "output_tokens_per_second_aggregate": 43.84,
+    "ttft_seconds_by_gpu": {
+      "0": 3.506
+    },
+    "model_load_seconds_by_gpu": {
+      "0": 3.1
+    },
+    "valid_json_pages": 1,
+    "checked_json_pages": 1,
+    "gpu_stats_inference_window": {
+      "0": {
+        "util_pct": {
+          "mean": 40.7,
+          "max": 100.0,
+          "samples": 54
+        },
+        "memory_used_mb": {
+          "mean": 19393.0,
+          "max": 19393.0,
+          "samples": 54
+        },
+        "power_w": {
+          "mean": 165.9,
+          "max": 367.64,
+          "samples": 54
+        }
+      },
+      "1": {
+        "util_pct": {
+          "mean": 0.0,
+          "max": 0.0,
+          "samples": 54
+        },
+        "memory_used_mb": {
+          "mean": 18.0,
+          "max": 18.0,
+          "samples": 54
+        },
+        "power_w": {
+          "mean": 31.3,
+          "max": 32.22,
+          "samples": 54
+        }
+      }
+    },
+    "gpu_stats_full_run": {
+      "0": {
+        "util_pct": {
+          "mean": 41.5,
+          "max": 100.0,
+          "samples": 86
+        },
+        "memory_used_mb": {
+          "mean": 16076.0,
+          "max": 19393.0,
+          "samples": 86
+        },
+        "power_w": {
+          "mean": 168.6,
+          "max": 367.64,
+          "samples": 86
+        }
+      },
+      "1": {
+        "util_pct": {
+          "mean": 0.0,
+          "max": 0.0,
+          "samples": 86
+        },
+        "memory_used_mb": {
+          "mean": 18.0,
+          "max": 18.0,
+          "samples": 86
+        },
+        "power_w": {
+          "mean": 33.4,
+          "max": 80.06,
+          "samples": 86
+        }
+      }
+    }
+  },
+  "workers": {
+    "0": {
+      "visible_devices": "0",
+      "pages": [
+        {
+          "page_no": 0,
+          "image_width": 1275,
+          "image_height": 1650,
+          "batch_size": 1,
+          "preprocess_seconds": 0.14334797486662865,
+          "generate_seconds": 28.983172887936234,
+          "input_tokens": 2930,
+          "output_tokens": 1277,
+          "output_tokens_per_second": 44.060048392132046,
+          "batch_output_tokens_per_second": 44.060048392132046,
+          "valid_json": true,
+          "num_cells": 14,
+          "response_chars": 4326,
+          "gpu": 0
+        }
+      ],
+      "model_load_seconds": 3.126325999153778,
+      "render_seconds": 0.04216425400227308,
+      "ttft_seconds": 3.5060770330019295,
+      "ttft_input_tokens": 2930,
+      "work_start_time": 1784127374.581066,
+      "work_seconds": 29.129027257906273,
+      "work_end_time": 1784127403.710097,
+      "cuda_peak_memory_bytes": 19761700352,
+      "device_name": "NVIDIA GeForce RTX 4090"
+    }
+  },
+  "pages_detail": [
+    {
+      "page_no": 0,
+      "image_width": 1275,
+      "image_height": 1650,
+      "batch_size": 1,
+      "preprocess_seconds": 0.14334797486662865,
+      "generate_seconds": 28.983172887936234,
+      "input_tokens": 2930,
+      "output_tokens": 1277,
+      "output_tokens_per_second": 44.060048392132046,
+      "batch_output_tokens_per_second": 44.060048392132046,
+      "valid_json": true,
+      "num_cells": 14,
+      "response_chars": 4326,
+      "gpu": 0
+    }
+  ]
+}
