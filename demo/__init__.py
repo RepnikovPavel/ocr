@@ -1,4 +1,5 @@
-"""dots.mocr web demo package (FastAPI server + UI)."""
-from .server import app  # noqa: F401
+"""dots.mocr web demo package (FastAPI server + UI).
 
-__all__ = ["app"]
+Import demo.server explicitly; importing it here would create state
+directories and a worker as a side effect of `from demo import db`.
+"""
