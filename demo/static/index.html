@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>__TITLE__</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body data-variant="__VARIANT__">
+  <header>
+    <h1>__TITLE__</h1>
+    <div id="model-panel">
+      <span id="model-state" class="badge">…</span>
+      <button id="model-start">загрузить модель</button>
+      <button id="model-stop" class="secondary">выгрузить</button>
+      <label title="do_not_unload_model: не выгружать модель по простою">
+        <input id="keep-loaded" type="checkbox"> не выгружать
+      </label>
+    </div>
+    <div id="gpu-panel"></div>
+  </header>
+
+  <main>
+    <section id="left">
+      <div id="dropzone">
+        <strong>Перетащите PDF или изображение</strong> <small>или кликните</small>
+        <input id="file-input" type="file" accept=".pdf,image/png,image/jpeg" hidden>
+      </div>
+      <div id="doc-toolbar" hidden>
+        <span id="doc-name" class="muted"></span>
+        <label>zoom <input id="zoom" type="range" min="40" max="200" value="100"></label>
+        <button id="select-all" class="secondary">все</button>
+        <button id="select-none" class="secondary">ничего</button>
+        <span id="selection-info" class="muted"></span>
+      </div>
+      <div id="viewer"></div>
+    </section>
+
+    <section id="right">
+      <div id="controls" class="panel">
+        <label>режим
+          <select id="prompt-mode"></select>
+        </label>
+        <span id="mode-hint" class="muted"></span>
+        <div id="custom-prompt-row" hidden>
+          <input id="custom-prompt" type="text" placeholder="ваш вопрос к странице (prompt_general)">
+        </div>
+        <div id="bbox-row" hidden>
+          <span class="muted">bbox: тяните мышкой прямоугольник по странице</span>
+          <span id="bbox-value" class="badge"></span>
+        </div>
+        <details>
+          <summary class="muted">параметры (по умолчанию — как у авторов)</summary>
+          <label>temperature <input id="temperature" type="number" step="0.05" min="0" max="2" placeholder="auto"></label>
+          <label>max tokens <input id="max-tokens" type="number" min="16" max="32768" placeholder="16384"></label>
+        </details>
+        <button id="run">Запустить на выбранных страницах</button>
+        <div id="run-error" class="error"></div>
+      </div>
+
+      <div class="panel">
+        <h3>Очередь задач</h3>
+        <div id="tasks"></div>
+      </div>
+
+      <div class="panel">
+        <h3>Результаты <span id="result-task" class="muted"></span></h3>
+        <div id="results"><span class="muted">Выберите страницы слева и запустите задачу.</span></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/marked.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

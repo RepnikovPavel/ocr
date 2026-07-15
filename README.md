@@ -28,60 +28,49 @@ MAX_NEW_TOKENS=8 scripts/test_dots_mocr_svg_gpu.sh
 
 Measured results: `reports/validation_2026-07-12.json`.
 
-## Быстрый деплой веб-демки на сервер
+## Веб-демки (dots.mocr и dots.mocr-svg)
 
-Требуется: Linux + Docker + NVIDIA Container Toolkit, GPU, ~ модель  ~10-15 ГБ.
+Одно FastAPI-приложение (`demo/server.py`) в двух вариантах (`DEMO_VARIANT=mocr|svg`):
 
-### 1. Клонировать
+- **mocr** — парсинг документов: слева PDF-скроллер (зум, выбор страниц мышкой,
+  drag-bbox для grounding OCR), справа очередь задач и результаты по страницам
+  (рендер Markdown / raw MD / layout JSON / layout-картинка). Все режимы
+  dots.mocr: layout_all, layout_only, ocr, grounding_ocr, web_parsing,
+  scene_spotting, general (свой промпт).
+- **svg** — image→SVG (dots.mocr-svg): выдача — inline-SVG / raw SVG /
+  markdown / сравнение оригинал-рендер. Температура 0.9 (по рекомендации авторов).
 
-```bash
-git clone https://github.com/RepnikovPavel/ocr.git
-cd ocr
-```
+Возможности: очередь задач с прогресс-баром и ETA (оценки из бенчмарков,
+уточняются по факту), отмена задач (в том числе на лету — генерация прерывается
+за доли секунды, работает и после перезагрузки страницы), sessions/jobs/tasks в
+SQLite (история переживает рестарты), мониторинг GPU, ленивое управление моделью:
+**по умолчанию GPU свободен** — модель грузится при поступлении задачи и
+выгружается после `DEMO_IDLE_UNLOAD_S` (180 c) простоя; чекбокс «не выгружать»
+(do_not_unload_model) и кнопки загрузить/выгрузить — в шапке UI.
 
-### 2. Сборка образа
-
-```bash
-./docker/build.sh
-```
-
-### 3. Запуск демки (пример путей на tuna)
-
-```bash
-export CKPT=/mnt/nvme/huggingface/models--rednote-hilab--dots.mocr/snapshots/main
-export STATE=/mnt/nvme/ocr_demo_state
-mkdir -p "$STATE"
-
-./docker/run_demo.sh "$CKPT" "$STATE" 8002
-```
-
-Или вручную:
+Запуск двух демок на сервере с 2x4090 (по контейнеру на GPU):
 
 ```bash
-docker run -d --name dots_mocr_demo \
-  --restart unless-stopped \
-  --gpus all --network bridge \
-  --publish 127.0.0.1:8002:7860 \
-  -e CKPTDIR=/models \
-  -e DEMO_STATE_DIR=/state \
-  --mount type=bind,src="$CKPT",target=/models,readonly \
-  --mount type=bind,src="$STATE",target=/state \
-  dots-mocr:trtllm-1.3.0rc20 \
-  python3 -m demo.server
+docker run -d --name demo_mocr --restart unless-stopped \
+  --gpus '"device=0"' --ipc=host -p 127.0.0.1:8601:7860 \
+  -v /mnt/data2:/mnt/data2 -w $REPO -e PYTHONPATH=$REPO/src \
+  -e CKPTDIR=$CKPT_MOCR -e DEMO_STATE_DIR=$STATE/state_mocr \
+  -e DEMO_VARIANT=mocr -e DEMO_DEVICE=cuda:0 \
+  -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+  dots-mocr:bench-cu126 python3 -m demo.server
+# demo_svg аналогично: device=1, порт 8602, CKPT=dots.mocr-svg, DEMO_VARIANT=svg
 ```
 
-### 4. Доступ
-
-На сервере: `http://localhost:8002`
-
-С локальной машины:
+Доступ с локальной машины — только через SSH-туннель (порты слушают 127.0.0.1):
 
 ```bash
-ssh -N -L 8002:127.0.0.1:8002 tuna-server
-# браузер → http://localhost:8002
+ssh -N -L 8601:127.0.0.1:8601 -L 8602:127.0.0.1:8602 <user>@<server>
+# браузер: http://localhost:8601 (документы) и http://localhost:8602 (SVG)
 ```
 
-UI позволяет загружать изображение или PDF, выбирать prompt mode (layout, OCR, SVG, grounding и т.д.), запускать и получать markdown + визуализацию layout + файлы для скачивания.
+Примечание: на 24 GB картах инференс идёт при dpi=150 и max_pixels=2.2M
+(`DEMO_DPI`/`DEMO_MAX_PIXELS`) — квадратичный vision attention на авторских
+11.3M px не помещается в память (см. отчёт бенчмарков).
 
 ## Оффлайн CLI (как раньше)
 
