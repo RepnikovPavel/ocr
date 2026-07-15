@@ -84,11 +84,10 @@ def get_parser():
             num_threads = int(os.environ.get("DEMO_NUM_THREADS", "4"))
             print(f"[demo] using num_thread={num_threads} for PDF parallelism (good for 100+ page docs)")
 
-            # Load the model on the GPU with the most free memory.
-            # This gives maximum headroom for the page inference and avoids OOM when other demos are running.
-            # (Full layer split "balanced"/"auto" for this model tends to put the bulk on one card anyway.)
+            # Load the model on the GPU with the most free memory: the 3B model
+            # fits on one card, and a single device avoids cross-GPU hops.
+            dev = "auto"
             try:
-                import subprocess
                 out = subprocess.check_output(
                     ['nvidia-smi', '--query-gpu=memory.free', '--format=csv,noheader,nounits'],
                     text=True, timeout=2
@@ -96,9 +95,9 @@ def get_parser():
                 frees = [int(x.strip()) for x in out.strip().split('\n')]
                 best_idx = frees.index(max(frees))
                 dev = f"cuda:{best_idx}"
-                print(f"[demo] loading model on {dev} (most free: {max(frees)} MiB) for headroom")
+                print(f"[demo] loading model on {dev} (most free: {max(frees)} MiB)")
             except Exception:
-                dev = "cuda"
+                pass
 
             PARSER = DotsMOCRParser(
                 ckpt=CKPTDIR,
@@ -109,11 +108,11 @@ def get_parser():
                 dpi=200,
                 output_dir=str(JOBS_DIR),
                 attn_implementation="sdpa",
-                device="auto",  # trigger model parallel split in parser
+                device=dev,
                 dtype="bfloat16",
-                max_pixels=1_500_000,  # even lower to fit 1 page inference on 16GB cards after weights (~14GB)
+                max_pixels=1_500_000,
             )
-            print(f"[demo] Model loaded in {time.time() - t0:.1f}s (device_map=auto for 32GB parallel)")
+            print(f"[demo] Model loaded in {time.time() - t0:.1f}s on {dev}")
     return PARSER
 
 
@@ -121,7 +120,7 @@ def _safe_name(name: str) -> str:
     return "".join(c if c.isalnum() or c in "._-" else "_" for c in name)[:80]
 
 
-def _save_upload(upload: UploadFile) -> Path:
+def _save_upload(upload: UploadFile) -> tuple[Path, Path, str]:
     suffix = Path(upload.filename or "upload.bin").suffix.lower()
     if suffix not in {".jpg", ".jpeg", ".png", ".pdf"}:
         raise HTTPException(400, f"Unsupported file type: {suffix}")
@@ -300,6 +299,7 @@ async def api_parse(
         if not candidates:
             raise HTTPException(404, "job not found or no input")
         input_path = candidates[0]
+        source_name = input_path.name
         out_dir = job_dir / "out"
         out_dir.mkdir(parents=True, exist_ok=True)
     else:
@@ -308,6 +308,7 @@ async def api_parse(
         if file.size and file.size > MAX_UPLOAD_MB * 1024 * 1024:
             raise HTTPException(413, f"File too large (> {MAX_UPLOAD_MB}MB)")
         input_path, job_dir, job_id = _save_upload(file)
+        source_name = file.filename
         out_dir = job_dir / "out"
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -374,7 +375,7 @@ async def api_parse(
     # Write a summary jsonl already done by parser, also write a job meta
     meta = {
         "job_id": job_id,
-        "filename": file.filename,
+        "filename": source_name,
         "prompt": prompt,
         "temperature": temperature,
         "max_tokens": max_tokens,

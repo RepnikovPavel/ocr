@@ -3,6 +3,7 @@ if "LOCAL_RANK" not in os.environ:
     os.environ["LOCAL_RANK"] = "0"
 
 import json
+import threading
 from tqdm import tqdm
 from multiprocessing.pool import ThreadPool
 import argparse
@@ -10,13 +11,6 @@ from PIL import Image
 import torch
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor
 from qwen_vl_utils import process_vision_info
-
-try:
-    from accelerate import dispatch_model, init_empty_weights, infer_auto_device_map
-except ImportError:
-    dispatch_model = None
-    init_empty_weights = None
-    infer_auto_device_map = None
 
 from dots_mocr.transformers_patch import register_transformers
 
@@ -67,6 +61,10 @@ class DotsMOCRParser:
         assert self.min_pixels is None or self.min_pixels >= MIN_PIXELS
         assert self.max_pixels is None or self.max_pixels <= MAX_PIXELS
 
+        # One HF model instance must not run concurrent generate() calls
+        # (parse_pdf may use a ThreadPool for rendering/post-processing).
+        self._generate_lock = threading.Lock()
+
         self._load_model(ckpt)
         print(f"Model loaded from {ckpt}, device={self.device}, dtype={self.dtype}, num_thread={self.num_thread}")
 
@@ -79,8 +77,21 @@ class DotsMOCRParser:
 
     def _resolve_dtype(self, dtype):
         if dtype == "auto":
-            return torch.bfloat16 if self.device == "cuda" else torch.float32
+            is_cuda = isinstance(self.device, str) and self.device.startswith("cuda")
+            return torch.bfloat16 if is_cuda else torch.float32
         return getattr(torch, dtype)
+
+    def _resolve_device_map(self):
+        if self.device == "cpu":
+            return {"": "cpu"}
+        if isinstance(self.device, str) and self.device.startswith("cuda:"):
+            return {"": self.device}
+        if torch.cuda.device_count() > 1:
+            # The 3B model fits on one 24GB card; "auto" splits layers across all
+            # visible GPUs only when several are exposed. For maximum throughput
+            # run one process per GPU instead (see benchmarks/bench_throughput.py).
+            return "auto"
+        return {"": "cuda:0"}
 
     def _load_model(self, ckpt):
         register_transformers()
@@ -91,52 +102,18 @@ class DotsMOCRParser:
         )
         config.vision_config.attn_implementation = self.attn_implementation
 
-        if self.device == "auto" and dispatch_model is not None:
-            # Load on CPU/meta then dispatch with explicit half/half layers for model parallel
-            print("[parser] loading for explicit model parallel split (half layers GPU0 / GPU1)")
-            with init_empty_weights():
-                dummy = AutoModelForCausalLM.from_config(config)
-            # infer a map, but override to split layers
-            device_map = infer_auto_device_map(dummy, max_memory={0: "14GiB", 1: "14GiB"}) if infer_auto_device_map is not None else {}
-            # force split layers if possible
-            if hasattr(dummy, 'model') and hasattr(dummy.model, 'layers'):
-                n = len(dummy.model.layers)
-                half = n // 2
-                for i in range(n):
-                    device_map[f'model.layers.{i}'] = 0 if i < half else 1
-                device_map['vision_tower'] = 0
-                device_map['lm_head'] = 1
-                device_map['model.embed_tokens'] = 0
-            print(f"[parser] device_map: {device_map}")
-            self.model = AutoModelForCausalLM.from_pretrained(
-                ckpt,
-                config=config,
-                attn_implementation=self.attn_implementation,
-                torch_dtype=torch.bfloat16,
-                device_map=device_map,
-                low_cpu_mem_usage=True,
-                local_files_only=True,
-                trust_remote_code=False,
-            )
-            # dispatch to make sure
-            self.model = dispatch_model(self.model, device_map=device_map)
-        else:
-            # single device or fallback
-            if isinstance(self.device, str) and self.device.startswith('cuda:'):
-                device_map = {"": self.device}
-            else:
-                device_map = "auto"
-            print(f"[parser] using device_map: {device_map}")
-            self.model = AutoModelForCausalLM.from_pretrained(
-                ckpt,
-                config=config,
-                attn_implementation=self.attn_implementation,
-                torch_dtype=torch.bfloat16,
-                device_map=device_map,
-                low_cpu_mem_usage=True,
-                local_files_only=True,
-                trust_remote_code=False,
-            )
+        device_map = self._resolve_device_map()
+        print(f"[parser] using device_map: {device_map}")
+        self.model = AutoModelForCausalLM.from_pretrained(
+            ckpt,
+            config=config,
+            attn_implementation=self.attn_implementation,
+            torch_dtype=self.dtype,
+            device_map=device_map,
+            low_cpu_mem_usage=True,
+            local_files_only=True,
+            trust_remote_code=False,
+        )
         self.model.eval()
 
         self.processor = AutoProcessor.from_pretrained(
@@ -145,7 +122,8 @@ class DotsMOCRParser:
             trust_remote_code=False,
         )
 
-    def _inference(self, image, prompt):
+    def _inference(self, image, prompt, temperature=None):
+        temperature = self.temperature if temperature is None else temperature
         messages = [
             {
                 "role": "user",
@@ -177,13 +155,13 @@ class DotsMOCRParser:
         inputs = inputs.to(self.device)
 
         generation_kwargs = {"max_new_tokens": self.max_completion_tokens}
-        if self.temperature > 0:
+        if temperature > 0:
             generation_kwargs.update(
                 do_sample=True,
-                temperature=self.temperature,
+                temperature=temperature,
                 top_p=self.top_p,
             )
-        with torch.inference_mode():
+        with self._generate_lock, torch.inference_mode():
             generated_ids = self.model.generate(**inputs, **generation_kwargs)
         generated_ids_trimmed = [
             out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
@@ -239,13 +217,7 @@ class DotsMOCRParser:
         input_height, input_width = smart_resize(image.height, image.width)
         prompt = self.get_prompt(prompt_mode, bbox, origin_image, image, min_pixels=min_pixels, max_pixels=max_pixels, custom_prompt=custom_prompt)
         
-        saved_temperature = self.temperature
-        if temperature is not None:
-            self.temperature = temperature
-
-        response = self._inference(image, prompt)
-
-        self.temperature = saved_temperature
+        response = self._inference(image, prompt, temperature=temperature)
 
         result = {'page_no': page_idx,
             "input_height": input_height,

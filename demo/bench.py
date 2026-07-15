@@ -34,10 +34,14 @@ def main():
         device="auto",
     )
 
+    pages = None
+    if args.max_pages and args.input.lower().endswith(".pdf"):
+        import fitz
+        with fitz.open(args.input) as doc:
+            pages = list(range(min(args.max_pages, doc.page_count)))
+
     t0 = time.time()
-    res = parser.parse_file(args.input, prompt_mode=args.prompt)
-    if args.max_pages:
-        res = res[:args.max_pages]
+    res = parser.parse_file(args.input, prompt_mode=args.prompt, pages=pages)
     elapsed = time.time() - t0
 
     n = max(1, len(res))
