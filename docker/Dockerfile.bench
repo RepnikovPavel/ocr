@@ -1,0 +1,36 @@
+# Benchmark / test environment for hosts with CUDA 12.x drivers (e.g. driver
+# 565 = CUDA 12.7 on 2x RTX 4090, where cu13x builds refuse to start).
+# The repo is bind-mounted at runtime, this image only pins the environment:
+#
+#   docker build -f docker/Dockerfile.bench -t dots-mocr:bench-cu126 docker/
+#   docker run --rm --gpus all --ipc=host -v /mnt:/mnt -v "$PWD:/workspace/ocr" \
+#     -w /workspace/ocr -e PYTHONPATH=/workspace/ocr/src dots-mocr:bench-cu126 \
+#     python3 -m pytest tests -m "not gpu"
+FROM python:3.12-slim
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    TOKENIZERS_PARALLELISM=false
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libcairo2 fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install torch==2.11.0 torchvision --index-url https://download.pytorch.org/whl/cu126
+
+RUN pip install \
+      transformers==5.5.4 \
+      accelerate \
+      CairoSVG==2.8.2 \
+      PyMuPDF==1.28.0 \
+      packaging==25.0 \
+      qwen-vl-utils==0.0.14 \
+      fastapi uvicorn python-multipart \
+      opencv-python-headless \
+      pytest pytest-timeout \
+      tqdm requests openai httpx pillow pydantic
+
+WORKDIR /workspace
