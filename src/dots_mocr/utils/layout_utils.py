@@ -225,7 +225,10 @@ def post_process_output(response, prompt_mode, origin_image, input_image, min_pi
         cleaner = OutputCleaner()
         response_clean = cleaner.clean_model_output(cells)
         if isinstance(response_clean, list):
-            response_clean = "\n\n".join([cell['text'] for cell in response_clean if 'text' in cell])
+            response_clean = "\n\n".join([
+                cell['text'] for cell in response_clean
+                if isinstance(cell, dict) and 'text' in cell
+            ])
         return response_clean, True
 
 
