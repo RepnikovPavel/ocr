@@ -126,10 +126,61 @@ docker rm -f dots_mocr_demo
 docker rm -f dots_mocr_demo; ./docker/run_demo.sh "$CKPT" "$STATE" 8002
 ```
 
+## Тесты
+
+Юнит-тесты (без GPU и без чекпойнта, ~1 мин):
+
+```bash
+python3 -m pytest tests -m "not gpu"
+```
+
+GPU-интеграционные тесты против реального чекпойнта — проверяют, что базовые функции
+dots.mocr (OCR, layout JSON c легальными bbox и известными категориями, многостраничный
+режим) реально отрабатывают на этом порте:
+
+```bash
+DOTS_MOCR_CKPT=/path/to/snapshot \
+DOTS_MOCR_TEST_PDF=/path/to/mobilenetv3.pdf \
+python3 -m pytest tests/test_gpu_integration.py -v -m gpu
+```
+
+Окружение для машин с драйвером CUDA 12.x (cu13x-сборки не стартуют на GeForce):
+
+```bash
+docker build -f docker/Dockerfile.bench -t dots-mocr:bench-cu126 docker/
+docker run --rm --gpus all --ipc=host -v /mnt:/mnt -v "$PWD:/workspace/ocr" \
+  -w /workspace/ocr -e PYTHONPATH=/workspace/ocr/src dots-mocr:bench-cu126 \
+  python3 -m pytest tests -m "not gpu"
+```
+
+## Бенчмарки / сетап 2x RTX 4090
+
+Модель 3B (~6 ГБ bf16) целиком помещается на одну 24 ГБ карту, поэтому максимальная
+загрузка двух 4090 — **data parallel**: по одной реплике модели на GPU, страницы PDF
+раздаются воркерам round-robin (`benchmarks/bench_throughput.py` поднимает по процессу
+на GPU через `CUDA_VISIBLE_DEVICES` и мержит метрики).
+
+```bash
+# одна страница / один GPU (латентность, TTFT)
+python3 -m benchmarks.bench_throughput --ckpt $CKPT --pdf doc.pdf --gpus 0 --pages 0 \
+  --output reports/bench_single.json
+
+# весь PDF на двух GPU (полная загрузка)
+python3 -m benchmarks.bench_throughput --ckpt $CKPT --pdf doc.pdf --gpus 0,1 \
+  --output reports/bench_2gpu.json
+
+# вся серия: 1 страница, 1 GPU, 2 GPU, 2 GPU с batch=2
+CKPT=... PDF=... ./scripts/run_bench_2x4090.sh
+```
+
+В отчёте: sec/page (латентность и wall), tokens/s на воркер и суммарно, TTFT,
+валидность JSON по страницам, загрузка/память/мощность GPU по сэмплам nvidia-smi.
+Результаты измерений: `reports/benchmark_2x4090_2026-07-15.md`.
+
 ## Ссылки
 
 Оригинал модели: https://huggingface.co/rednote-hilab/dots.mocr
 
-## Секреты / сервер
+## Секреты
 
-Смотри `/mnt/nvme/secrets/` (gpt_56 / glm_52) — SSH, токены, пути к workspace и HF на сервере tuna (ru.tuna.am:31932). Не коммитить.
+Секреты (SSH, токены, адреса серверов) в репозиторий не коммитятся — храните их локально.
