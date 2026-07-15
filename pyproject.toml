@@ -18,3 +18,10 @@ dots-mocr = "dots_mocr.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "src"]
+markers = [
+    "gpu: integration test that needs CUDA and a real checkpoint (DOTS_MOCR_CKPT)",
+]
