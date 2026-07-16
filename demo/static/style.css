@@ -79,3 +79,6 @@ a#peer-link:hover { text-decoration: underline; }
 .md-render table { border-collapse: collapse; }
 .md-render td, .md-render th { border: 1px solid #3a4255; padding: 3px 7px; }
 .md-render img { max-width: 100%; }
+.md-render .math-display { display: block; text-align: center; margin: 8px 0; overflow-x: auto; overflow-y: hidden; }
+.md-render mjx-container { color: #e6e8f0; max-width: 100%; }
+.md-render mjx-container svg { max-width: 100%; }
