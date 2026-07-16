@@ -46,6 +46,9 @@ STATE_DIR = Path(os.environ.get("DEMO_STATE_DIR", "/state"))
 PORT = int(os.environ.get("PORT", "7860"))
 INFER_DPI = int(os.environ.get("DEMO_DPI", "150"))
 MAX_PIXELS = int(os.environ.get("DEMO_MAX_PIXELS", "2200000"))
+# the sibling demo (the other model) — rendered as a link in the header
+PEER_PORT = os.environ.get("DEMO_PEER_PORT")
+PEER_TITLE = os.environ.get("DEMO_PEER_TITLE", "вторая модель")
 VIEW_DPI = 144  # page images shown in the viewer
 # per-variant cookie: both demos run on one host (different ports), and
 # cookies are host-scoped — a shared name would rotate sessions on each switch
@@ -193,6 +196,7 @@ def api_state(request: Request):
     return {
         "variant": VARIANT,
         "title": config["title"],
+        "peer": {"port": PEER_PORT, "title": PEER_TITLE} if PEER_PORT else None,
         "server_time": _time.time(),
         "ckpt": CKPTDIR,
         "prompt_modes": [
