@@ -23,6 +23,7 @@ async function pollState() {
     const data = await res.json();
     if (data.server_time) state.timeOffset = data.server_time - Date.now() / 1000;
     renderModel(data.worker);
+    renderDevices(data.devices, data.worker);
     renderGpus(data.gpus);
     renderTasks(data.tasks);
     initPeer(data);
@@ -49,6 +50,23 @@ function renderModel(worker) {
   if (document.activeElement !== keep) keep.checked = !!worker.keep_loaded;
 }
 
+function renderDevices(devices, worker) {
+  const sel = $("device-select");
+  const target = worker.configured_device || "auto";
+  const opts = (devices || ["auto"]).join(",");
+  // rebuild options only when the set changes, and never while the user is picking
+  if (sel.dataset.opts !== opts && document.activeElement !== sel) {
+    sel.innerHTML = "";
+    (devices || ["auto"]).forEach((d) => {
+      const o = document.createElement("option");
+      o.value = d; o.textContent = d;
+      sel.appendChild(o);
+    });
+    sel.dataset.opts = opts;
+  }
+  if (document.activeElement !== sel) sel.value = target;
+}
+
 function renderGpus(gpus) {
   $("gpu-panel").innerHTML = (gpus || []).map((g) => {
     const memPct = g.memory_total_mb ? Math.round(100 * g.memory_used_mb / g.memory_total_mb) : 0;
@@ -64,6 +82,14 @@ $("keep-loaded").onchange = () => {
   const body = new FormData();
   body.append("value", $("keep-loaded").checked);
   fetch("/api/model/keep_loaded", {method: "POST", body}).then(pollState);
+};
+$("device-select").onchange = () => {
+  const body = new FormData();
+  body.append("device", $("device-select").value);
+  fetch("/api/model/device", {method: "POST", body})
+    .then((r) => { if (!r.ok) return r.text().then((t) => { throw new Error(t); }); })
+    .then(pollState)
+    .catch((e) => { $("run-error").textContent = "смена GPU: " + e; });
 };
 
 /* ------------------------------------------------ help & peer link */
@@ -386,6 +412,18 @@ function renderMarkdownWithMath(src) {
   return html;
 }
 
+/* Picture links in the markdown are relative (images/foo.png). Resolve them
+   against the md file's served directory so the preview loads the crop from
+   its folder — the markdown itself keeps only the relative link. */
+function rewriteRelativeImages(el, baseUrl) {
+  el.querySelectorAll("img[src]").forEach((img) => {
+    const src = img.getAttribute("src") || "";
+    if (/^(https?:|data:|\/)/i.test(src)) return; // absolute / data: untouched
+    img.setAttribute("src", baseUrl + src.replace(/^\.\//, ""));
+    img.setAttribute("loading", "lazy");
+  });
+}
+
 function typesetMath(el) {
   if (!(window.MathJax && MathJax.typesetPromise)) return;
   MathJax.typesetPromise([el]).then(() => {
@@ -484,10 +522,14 @@ function resultCard(page) {
     });
   }
   if (urls.md_content) {
+    // the markdown stores picture links relative to its own folder (images/…);
+    // resolve them against the md file's served directory at preview time
+    const mdBase = urls.md_content.replace(/[^/]*$/, "");
     const tab = addTab(urls.svg_content ? "md" : "MD", async (el) => {
       el.innerHTML = `<div class="md-render"></div>`;
       const target = el.querySelector(".md-render");
       target.innerHTML = renderMarkdownWithMath(await rawFetch(urls.md_content));
+      rewriteRelativeImages(target, mdBase);
       typesetMath(target);
     }, !first);
     first = first || tab;

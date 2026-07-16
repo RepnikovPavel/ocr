@@ -182,6 +182,37 @@ def test_worker_new_task_resumes_paused_worker(env):
         worker.shutdown()
 
 
+def test_worker_set_device_reloads_on_new_device(env):
+    loaded_on = []
+
+    def factory():
+        stub = StubParser()
+        stub.device = worker.device
+        loaded_on.append(worker.device)
+        return stub
+
+    worker = DemoWorker(ckpt="/x", jobs_dir=env["jobs_dir"], device="cuda:0",
+                        parser_factory=factory, autostart=True, keep_loaded=True)
+    worker.start()
+    try:
+        assert wait_for(lambda: worker.model_state == "loaded")
+        assert worker.status()["configured_device"] == "cuda:0"
+        worker.set_device("cuda:1")
+        # wait for the actual reload (factory called again), not just the flag flip
+        assert wait_for(lambda: len(loaded_on) >= 2)
+        assert wait_for(lambda: worker.model_state == "loaded")
+        assert loaded_on[-1] == "cuda:1"
+        assert worker.status()["configured_device"] == "cuda:1"
+        assert worker.status()["device"] == "cuda:1"
+        # setting the same device is a no-op (no extra reload)
+        n = len(loaded_on)
+        worker.set_device("cuda:1")
+        time.sleep(0.4)
+        assert len(loaded_on) == n
+    finally:
+        worker.shutdown()
+
+
 def test_worker_load_error_pauses_instead_of_retry_loop(env):
     calls = {"n": 0}
 

@@ -142,39 +142,63 @@ def clean_text(text: str) -> str:
     return text
 
 
-def layoutjson2md(image: Image.Image, cells: list, text_key: str = 'text', no_page_hf: bool = False) -> str:
+def layoutjson2md(image: Image.Image, cells: list, text_key: str = 'text', no_page_hf: bool = False,
+                  image_dir: str = None, rel_prefix: str = "images", name: str = "img") -> str:
     """
     Converts a layout JSON format to Markdown.
-    
+
     In the layout JSON, formulas are LaTeX, tables are HTML, and text is Markdown.
-    
+
+    Picture regions are written as SEPARATE image files (never inlined as base64)
+    when ``image_dir`` is given: each crop is saved to ``image_dir`` and the
+    markdown gets a relative link ``![](rel_prefix/<file>.png)``. This keeps the
+    markdown small and token-cheap for downstream code agents; the preview renders
+    the links with standard tooling. Without ``image_dir`` it falls back to the
+    legacy base64 embed (for standalone/offline markdown).
+
     Args:
         image: A PIL Image object.
         cells: A list of dictionaries, each representing a layout cell.
         text_key: The key for the text field in the cell dictionary.
-        no_page_header_footer: If True, skips page headers and footers.
-        
+        no_page_hf: If True, skips page headers and footers.
+        image_dir: Directory to save picture crops into (created if missing).
+        rel_prefix: Path prefix used in the markdown links (relative to the .md).
+        name: Filename stem for saved crops (e.g. the page save-name).
+
     Returns:
         str: The text in Markdown format.
     """
     text_items = []
+    pic_idx = 0
+
+    if image_dir is not None:
+        os.makedirs(image_dir, exist_ok=True)
 
     for i, cell in enumerate(cells):
         x1, y1, x2, y2 = [int(coord) for coord in cell['bbox']]
-        text = cell.get(text_key, "")
-        
+
         if no_page_hf and cell['category'] in ['Page-header', 'Page-footer']:
             continue
-        
+
         if cell['category'] == 'Picture':
-            image_crop = image.crop((x1, y1, x2, y2))
-            image_base64 = PILimage_to_base64(image_crop)
-            text_items.append(f"![]({image_base64})")
+            # clamp to image bounds; skip degenerate boxes
+            x1c, y1c = max(0, x1), max(0, y1)
+            x2c, y2c = min(image.width, x2), min(image.height, y2)
+            if x2c <= x1c or y2c <= y1c:
+                continue
+            image_crop = image.crop((x1c, y1c, x2c, y2c))
+            if image_dir is not None:
+                fname = f"{name}_pic_{pic_idx}.png"
+                image_crop.save(os.path.join(image_dir, fname))
+                link = f"{rel_prefix}/{fname}" if rel_prefix else fname
+                text_items.append(f"![]({link})")
+                pic_idx += 1
+            else:
+                text_items.append(f"![]({PILimage_to_base64(image_crop)})")
         elif cell['category'] == 'Formula':
-            text_items.append(get_formula_in_markdown(text))
-        else:            
-            text = clean_text(text)
-            text_items.append(f"{text}")
+            text_items.append(get_formula_in_markdown(cell.get(text_key, "")))
+        else:
+            text_items.append(f"{clean_text(cell.get(text_key, ''))}")
 
     markdown_text = '\n\n'.join(text_items)
     return markdown_text

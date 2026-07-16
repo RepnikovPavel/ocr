@@ -12,6 +12,9 @@
     <a id="peer-link" class="badge" hidden></a>
     <div id="model-panel">
       <span id="model-state" class="badge">…</span>
+      <label title="видеокарта для инференса (смена перезагружает модель)">
+        GPU <select id="device-select"></select>
+      </label>
       <button id="model-start">загрузить модель</button>
       <button id="model-stop" class="secondary">выгрузить</button>
       <label title="do_not_unload_model: не выгружать модель по простою">
