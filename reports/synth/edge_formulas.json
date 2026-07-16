@@ -1,0 +1,688 @@
+{
+  "config": {
+    "ckpt": "/mnt/data2/huggingface/models--rednote-hilab--dots.mocr/snapshots/main",
+    "dpi": 200,
+    "max_pixels": 2200000,
+    "max_new_tokens": 8192,
+    "device": "cuda:0"
+  },
+  "summary": {
+    "by_kind": {
+      "formula": 0.9603
+    },
+    "n_cases": 20,
+    "families": {
+      "frac_nest": [
+        {
+          "knob": 1,
+          "case_id": "frac_d1",
+          "score": 1.0
+        },
+        {
+          "knob": 2,
+          "case_id": "frac_d2",
+          "score": 1.0
+        },
+        {
+          "knob": 3,
+          "case_id": "frac_d3",
+          "score": 0.9885
+        },
+        {
+          "knob": 4,
+          "case_id": "frac_d4",
+          "score": 0.4973
+        },
+        {
+          "knob": 5,
+          "case_id": "frac_d5",
+          "score": 0.984
+        },
+        {
+          "knob": 6,
+          "case_id": "frac_d6",
+          "score": 0.9157
+        }
+      ],
+      "matrix": [
+        {
+          "knob": 2,
+          "case_id": "matrix_n2",
+          "score": 1.0
+        },
+        {
+          "knob": 3,
+          "case_id": "matrix_n3",
+          "score": 1.0
+        },
+        {
+          "knob": 4,
+          "case_id": "matrix_n4",
+          "score": 1.0
+        },
+        {
+          "knob": 5,
+          "case_id": "matrix_n5",
+          "score": 0.964
+        },
+        {
+          "knob": 6,
+          "case_id": "matrix_n6",
+          "score": 0.9675
+        }
+      ],
+      "polynomial": [
+        {
+          "knob": 3,
+          "case_id": "poly_t3",
+          "score": 1.0
+        },
+        {
+          "knob": 5,
+          "case_id": "poly_t5",
+          "score": 1.0
+        },
+        {
+          "knob": 8,
+          "case_id": "poly_t8",
+          "score": 1.0
+        },
+        {
+          "knob": 12,
+          "case_id": "poly_t12",
+          "score": 1.0
+        }
+      ],
+      "sum_int": [
+        {
+          "knob": 1,
+          "case_id": "sum_int_1",
+          "score": 1.0
+        },
+        {
+          "knob": 2,
+          "case_id": "sum_int_2",
+          "score": 1.0
+        },
+        {
+          "knob": 3,
+          "case_id": "sum_int_3",
+          "score": 1.0
+        }
+      ],
+      "deep_nest": [
+        {
+          "knob": 3,
+          "case_id": "nested_sub_1",
+          "score": 0.8889
+        }
+      ],
+      "mixed": [
+        {
+          "knob": 2,
+          "case_id": "mixed_1",
+          "score": 1.0
+        }
+      ]
+    }
+  },
+  "cases": [
+    {
+      "case_id": "frac_d1",
+      "kind": "formula",
+      "group": "formulas",
+      "params": {
+        "level": 1,
+        "family": "frac_nest"
+      },
+      "primary_metric": "token_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "token_recall": 1.0,
+        "struct_recall": 1.0,
+        "frac_expected": 1,
+        "frac_detected": 1,
+        "frac_count_ok": true,
+        "gt_token_count": 15,
+        "got_token_count": 15
+      },
+      "categories": {
+        "Text": 1,
+        "Formula": 1
+      },
+      "filtered": false,
+      "seconds": 6.19,
+      "output_chars": 48,
+      "model_text": "$$\n\\frac{x_0 + a_1}{b_1 + x_0}\n$$"
+    },
+    {
+      "case_id": "frac_d2",
+      "kind": "formula",
+      "group": "formulas",
+      "params": {
+        "level": 2,
+        "family": "frac_nest"
+      },
+      "primary_metric": "token_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "token_recall": 1.0,
+        "struct_recall": 1.0,
+        "frac_expected": 3,
+        "frac_detected": 3,
+        "frac_count_ok": true,
+        "gt_token_count": 39,
+        "got_token_count": 39
+      },
+      "categories": {
+        "Text": 1,
+        "Formula": 1
+      },
+      "filtered": false,
+      "seconds": 6.09,
+      "output_chars": 88,
+      "model_text": "$$\n\\frac{\\frac{x_0+a_1}{b_1+x_0} + a_2}{b_2 + \\frac{x_0+a_1}{b_1+x_0}}\n$$"
+    },
+    {
+      "case_id": "frac_d3",
+      "kind": "formula",
+      "group": "formulas",
+      "params": {
+        "level": 3,
+        "family": "frac_nest"
+      },
+      "primary_metric": "token_recall",
+      "primary_value": 0.9885,
+      "metrics": {
+        "token_recall": 0.9885,
+        "struct_recall": 1.0,
+        "frac_expected": 7,
+        "frac_detected": 6,
+        "frac_count_ok": false,
+        "gt_token_count": 87,
+        "got_token_count": 87
+      },
+      "categories": {
+        "Text": 1,
+        "Formula": 1
+      },
+      "filtered": false,
+      "seconds": 7.14,
+      "output_chars": 171,
+      "model_text": "$$\n\\frac{\\frac{x_0+a_1}{b_1+x_0}+a_2}{b_2+\\frac{x_0+a_1}{b_1+x_0}} + a_3 \\overline{b_3 + \\frac{\\frac{x_0+a_1}{b_1+x_0}+a_2}{b_2+\\frac{x_0+a_1}{b_1+x_0}}}\n$$"
+    },
+    {
+      "case_id": "frac_d4",
+      "kind": "formula",
+      "group": "formulas",
+      "params": {
+        "level": 4,
+        "family": "frac_nest"
+      },
+      "primary_metric": "token_recall",
+      "primary_value": 0.4973,
+      "metrics": {
+        "token_recall": 0.4973,
+        "struct_recall": 1.0,
+        "frac_expected": 15,
+        "frac_detected": 7,
+        "frac_count_ok": false,
+        "gt_token_count": 183,
+        "got_token_count": 91
+      },
+      "categories": {
+        "Text": 1,
+        "Formula": 1
+      },
+      "filtered": false,
+      "seconds": 7.2,
+      "output_chars": 170,
+      "model_text": "$$\nb_4 + \\frac{\\frac{\\frac{x_0+a_1}{b_1+x_0}+a_2}{b_2+\\frac{x_0+a_1}{b_1+x_0}}+a_3}{b_3+\\frac{\\frac{x_0+a_1}{b_1+x_0}+a_2}{b_2+\\frac{x_0+a_1}{b_1+x_0}}}\n$$"
+    },
+    {
+      "case_id": "frac_d5",
+      "kind": "formula",
+      "group": "formulas",
+      "params": {
+        "level": 5,
+        "family": "frac_nest"
+      },
+      "primary_metric": "token_recall",
+      "primary_value": 0.984,
+      "metrics": {
+        "token_recall": 0.984,
+        "struct_recall": 1.0,
+        "frac_expected": 31,
+        "frac_detected": 28,
+        "frac_count_ok": false,
+        "gt_token_count": 375,
+        "got_token_count": 407
+      },
+      "categories": {
+        "Text": 1,
+        "Formula": 1
+      },
+      "filtered": false,
+      "seconds": 14.39,
+      "output_chars": 711,
+      "model_text": "$$\n\\begin{aligned}\n& \\frac{\\frac{x_0+a_1}{b_1+x_0}+a_2}{b_2+\\frac{x_0+a_1}{b_1+x_0}}+a_3 \\\\\n& \\frac{\\frac{x_0+a_1}{b_1+x_0}+a_2}{b_3+\\frac{x_0+a_1}{b_2+\\frac{x_0+a_1}{b_1+x_0}}}+a_4 \\\\\n& b_4+\\frac{\\frac{x_0+a_1}{b_1+x_0}+a_2}{b_2+\\frac{x_0+a_1}{b_1+x_0}} \\\\\n& \\frac{\\frac{x_0+a_1}{b_1+x_0}+a_2}{b_3+\\frac{x_0+a_1}{b_2+\\frac{x_0+a_1}{b_1+x_0}}}+a_5 \\\\\n& b_5+\\frac{\\frac{x_0+a_1}{b_1+x_0}+a_2}{b_2+\\frac{x_0+a_1}{b_1+x_0}} \\\\\n& \\frac{\\frac{x_0+a_1}{b_1+x_0}+a_2}{b_3+\\frac{x_0+a_1}{b_2+\\frac{x_0+a_1}{b_1+x_0}}}+a_4 \\\\\n& b_4+\\frac{\\frac{x_0+a_1}{b_1+x_0}+a_2}{b_2+\\frac{x_0+a_1}{b_1+x_0}} \\\\\n& \\frac{\\frac{x_0+a_1}{b_1+x_0}+a_2}{b_3+\\frac{x_0+a_1}{b_2+\\frac{x_0+a_1}{b_1+x_0}}}+a_5\n\\end{aligned}\n$$"
+    },
+    {
+      "case_id": "frac_d6",
+      "kind": "formula",
+      "group": "formulas",
+      "params": {
+        "level": 6,
+        "family": "frac_nest"
+      },
+      "primary_metric": "token_recall",
+      "primary_value": 0.9157,
+      "metrics": {
+        "token_recall": 0.9157,
+        "struct_recall": 1.0,
+        "frac_expected": 63,
+        "frac_detected": 305,
+        "frac_count_ok": false,
+        "gt_token_count": 759,
+        "got_token_count": 9094
+      },
+      "categories": {},
+      "filtered": true,
+      "seconds": 160.88,
+      "output_chars": 13245,
+      "model_text": "[{\"bbox\": [85, 91, 251, 116], \"category\": \"Text\", \"text\": \"CASEID:frac_d6\"}, {\"bbox\": [494, 163, 736, 1054], \"category\": \"Formula\", \"text\": \"$$\\n\\\\begin{aligned}\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_4 \\\\\\\\\\n& b_3 + \\\\frac{x_0+a_1}{b_1+x_0} + a_5 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& b_4 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_4 \\\\\\\\\\n& b_3 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& b_5 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_4 \\\\\\\\\\n& b_3 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& b_4 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_5 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_4 \\\\\\\\\\n& b_3 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& b_4 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_4 \\\\\\\\\\n& b_3 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& b_5 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_4 \\\\\\\\\\n& b_3 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& b_4 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_5 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_4 \\\\\\\\\\n& b_3 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& b_4 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_4 \\\\\\\\\\n& b_3 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& b_5 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_4 \\\\\\\\\\n& b_3 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& b_4 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_5 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_4 \\\\\\\\\\n& b_3 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& b_4 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_4 \\\\\\\\\\n& b_3 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& b_5 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_4 \\\\\\\\\\n& b_3 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& b_4 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_5 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_4 \\\\\\\\\\n& b_3 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& b_4 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_4 \\\\\\\\\\n& b_3 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& b_5 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_4 \\\\\\\\\\n& b_3 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& b_4 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_5 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_4 \\\\\\\\\\n& b_3 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& b_4 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_4 \\\\\\\\\\n& b_3 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& b_5 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& \\\\frac{x_0+a_1}{b_1+x_0} + a_4 \\\\\\\\\\n& b_3 + \\\\frac{x_0+a_1}{b_1+x_0} + a_2 \\\\\\\\\\n& b_2 + \\\\frac{x_0+a_1}{b_1+x_0} + a_3 \\\\\\\\\\n& b_4 + \\\\fr"
+    },
+    {
+      "case_id": "matrix_n2",
+      "kind": "formula",
+      "group": "formulas",
+      "params": {
+        "level": 2,
+        "family": "matrix"
+      },
+      "primary_metric": "token_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "token_recall": 1.0,
+        "struct_recall": 1.0,
+        "frac_expected": 0,
+        "frac_detected": 0,
+        "frac_count_ok": true,
+        "gt_token_count": 30,
+        "got_token_count": 30
+      },
+      "categories": {
+        "Text": 1,
+        "Formula": 1
+      },
+      "filtered": false,
+      "seconds": 5.88,
+      "output_chars": 87,
+      "model_text": "$$\n\\begin{pmatrix} a_{00} & a_{01} \\\\ a_{10} & a_{11} \\end{pmatrix}\n$$"
+    },
+    {
+      "case_id": "matrix_n3",
+      "kind": "formula",
+      "group": "formulas",
+      "params": {
+        "level": 3,
+        "family": "matrix"
+      },
+      "primary_metric": "token_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "token_recall": 1.0,
+        "struct_recall": 1.0,
+        "frac_expected": 0,
+        "frac_detected": 0,
+        "frac_count_ok": true,
+        "gt_token_count": 49,
+        "got_token_count": 49
+      },
+      "categories": {
+        "Text": 1,
+        "Formula": 1
+      },
+      "filtered": false,
+      "seconds": 6.47,
+      "output_chars": 133,
+      "model_text": "$$\n\\begin{pmatrix} a_{00} & a_{01} & a_{02} \\\\ a_{10} & a_{11} & a_{12} \\\\ a_{20} & a_{21} & a_{22} \\end{pmatrix}\n$$"
+    },
+    {
+      "case_id": "matrix_n4",
+      "kind": "formula",
+      "group": "formulas",
+      "params": {
+        "level": 4,
+        "family": "matrix"
+      },
+      "primary_metric": "token_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "token_recall": 1.0,
+        "struct_recall": 1.0,
+        "frac_expected": 0,
+        "frac_detected": 0,
+        "frac_count_ok": true,
+        "gt_token_count": 76,
+        "got_token_count": 76
+      },
+      "categories": {
+        "Text": 1,
+        "Formula": 1
+      },
+      "filtered": false,
+      "seconds": 7.3,
+      "output_chars": 197,
+      "model_text": "$$\n\\begin{pmatrix} a_{00} & a_{01} & a_{02} & a_{03} \\\\ a_{10} & a_{11} & a_{12} & a_{13} \\\\ a_{20} & a_{21} & a_{22} & a_{23} \\\\ a_{30} & a_{31} & a_{32} & a_{33} \\end{pmatrix}\n$$"
+    },
+    {
+      "case_id": "matrix_n5",
+      "kind": "formula",
+      "group": "formulas",
+      "params": {
+        "level": 5,
+        "family": "matrix"
+      },
+      "primary_metric": "token_recall",
+      "primary_value": 0.964,
+      "metrics": {
+        "token_recall": 0.964,
+        "struct_recall": 1.0,
+        "frac_expected": 0,
+        "frac_detected": 0,
+        "frac_count_ok": true,
+        "gt_token_count": 111,
+        "got_token_count": 115
+      },
+      "categories": {
+        "Text": 1,
+        "Formula": 1
+      },
+      "filtered": false,
+      "seconds": 8.42,
+      "output_chars": 281,
+      "model_text": "$$\n\\begin{pmatrix}\na_{00} & a_{01} & a_{02} & a_{03} & a_{04} \\\\\na_{10} & a_{11} & a_{12} & a_{13} & a_{14} \\\\\na_{20} & a_{21} & a_{22} & a_{23} & a_{24} \\\\\na_{30} & a_{31} & a_{32} & a_{33} & a_{34} \\\\\na_{40} & a_{41} & a_{42} & a_{43} & a_{44}\n\\end{pmatrix}\n$$"
+    },
+    {
+      "case_id": "matrix_n6",
+      "kind": "formula",
+      "group": "formulas",
+      "params": {
+        "level": 6,
+        "family": "matrix"
+      },
+      "primary_metric": "token_recall",
+      "primary_value": 0.9675,
+      "metrics": {
+        "token_recall": 0.9675,
+        "struct_recall": 1.0,
+        "frac_expected": 0,
+        "frac_detected": 0,
+        "frac_count_ok": true,
+        "gt_token_count": 154,
+        "got_token_count": 159
+      },
+      "categories": {
+        "Text": 1,
+        "Formula": 1
+      },
+      "filtered": false,
+      "seconds": 9.66,
+      "output_chars": 379,
+      "model_text": "$$\n\\begin{pmatrix}\na_{00} & a_{01} & a_{02} & a_{03} & a_{04} & a_{05} \\\\\na_{10} & a_{11} & a_{12} & a_{13} & a_{14} & a_{15} \\\\\na_{20} & a_{21} & a_{22} & a_{23} & a_{24} & a_{25} \\\\\na_{30} & a_{31} & a_{32} & a_{33} & a_{34} & a_{35} \\\\\na_{40} & a_{41} & a_{42} & a_{43} & a_{44} & a_{45} \\\\\na_{50} & a_{51} & a_{52} & a_{53} & a_{54} & a_{55}\n\\end{pmatrix}\n$$"
+    },
+    {
+      "case_id": "poly_t3",
+      "kind": "formula",
+      "group": "formulas",
+      "params": {
+        "level": 3,
+        "family": "polynomial"
+      },
+      "primary_metric": "token_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "token_recall": 1.0,
+        "struct_recall": 1.0,
+        "frac_expected": 0,
+        "frac_detected": 0,
+        "frac_count_ok": true,
+        "gt_token_count": 27,
+        "got_token_count": 27
+      },
+      "categories": {
+        "Text": 1,
+        "Formula": 1
+      },
+      "filtered": false,
+      "seconds": 5.68,
+      "output_chars": 54,
+      "model_text": "$$\nc_3x^3 + c_2x^2 + c_1x^1 + c_0x^0\n$$"
+    },
+    {
+      "case_id": "poly_t5",
+      "kind": "formula",
+      "group": "formulas",
+      "params": {
+        "level": 5,
+        "family": "polynomial"
+      },
+      "primary_metric": "token_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "token_recall": 1.0,
+        "struct_recall": 1.0,
+        "frac_expected": 0,
+        "frac_detected": 0,
+        "frac_count_ok": true,
+        "gt_token_count": 41,
+        "got_token_count": 41
+      },
+      "categories": {
+        "Text": 1,
+        "Formula": 1
+      },
+      "filtered": false,
+      "seconds": 5.93,
+      "output_chars": 72,
+      "model_text": "$$\nc_5x^5 + c_4x^4 + c_3x^3 + c_2x^2 + c_1x^1 + c_0x^0\n$$"
+    },
+    {
+      "case_id": "poly_t8",
+      "kind": "formula",
+      "group": "formulas",
+      "params": {
+        "level": 8,
+        "family": "polynomial"
+      },
+      "primary_metric": "token_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "token_recall": 1.0,
+        "struct_recall": 1.0,
+        "frac_expected": 0,
+        "frac_detected": 0,
+        "frac_count_ok": true,
+        "gt_token_count": 62,
+        "got_token_count": 62
+      },
+      "categories": {
+        "Text": 1,
+        "Formula": 1
+      },
+      "filtered": false,
+      "seconds": 6.36,
+      "output_chars": 101,
+      "model_text": "$$\nc_8x^8 + c_7x^7 + c_6x^6 + c_5x^5 + c_4x^4 + c_3x^3 + c_2x^2 + c_1x^1 + c_0x^0\n$$"
+    },
+    {
+      "case_id": "poly_t12",
+      "kind": "formula",
+      "group": "formulas",
+      "params": {
+        "level": 12,
+        "family": "polynomial"
+      },
+      "primary_metric": "token_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "token_recall": 1.0,
+        "struct_recall": 1.0,
+        "frac_expected": 0,
+        "frac_detected": 0,
+        "frac_count_ok": true,
+        "gt_token_count": 90,
+        "got_token_count": 90
+      },
+      "categories": {
+        "Text": 1,
+        "Formula": 1
+      },
+      "filtered": false,
+      "seconds": 7.54,
+      "output_chars": 194,
+      "model_text": "$$\nc_{12}x^{12} + c_{11}x^{11} + c_{10}x^{10} + c_{9}x^{9} + c_{8}x^{8} + c_{7}x^{7} + c_{6}x^{6} + c_{5}x^{5} + c_{4}x^{4} + c_{3}x^{3} + c_{2}x^{2} + c_{1}x^{1} + c_{0}x^{0}\n$$"
+    },
+    {
+      "case_id": "sum_int_1",
+      "kind": "formula",
+      "group": "formulas",
+      "params": {
+        "level": 1,
+        "family": "sum_int"
+      },
+      "primary_metric": "token_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "token_recall": 1.0,
+        "struct_recall": 1.0,
+        "frac_expected": 2,
+        "frac_detected": 2,
+        "frac_count_ok": true,
+        "gt_token_count": 18,
+        "got_token_count": 18
+      },
+      "categories": {
+        "Text": 1,
+        "Formula": 1
+      },
+      "filtered": false,
+      "seconds": 5.79,
+      "output_chars": 71,
+      "model_text": "$$\n\\sum_{i=1}^{n} \\frac{1}{i^2} = \\frac{\\pi^2}{6}\n$$"
+    },
+    {
+      "case_id": "sum_int_2",
+      "kind": "formula",
+      "group": "formulas",
+      "params": {
+        "level": 2,
+        "family": "sum_int"
+      },
+      "primary_metric": "token_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "token_recall": 1.0,
+        "struct_recall": 1.0,
+        "frac_expected": 1,
+        "frac_detected": 1,
+        "frac_count_ok": true,
+        "gt_token_count": 18,
+        "got_token_count": 18
+      },
+      "categories": {
+        "Text": 1,
+        "Formula": 1
+      },
+      "filtered": false,
+      "seconds": 5.78,
+      "output_chars": 77,
+      "model_text": "$$\n\\int_{0}^{\\infty} e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}\n$$"
+    },
+    {
+      "case_id": "sum_int_3",
+      "kind": "formula",
+      "group": "formulas",
+      "params": {
+        "level": 3,
+        "family": "sum_int"
+      },
+      "primary_metric": "token_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "token_recall": 1.0,
+        "struct_recall": 1.0,
+        "frac_expected": 1,
+        "frac_detected": 1,
+        "frac_count_ok": true,
+        "gt_token_count": 31,
+        "got_token_count": 31
+      },
+      "categories": {
+        "Text": 1,
+        "Formula": 1
+      },
+      "filtered": false,
+      "seconds": 6.2,
+      "output_chars": 110,
+      "model_text": "$$\n\\sum_{k=0}^{\\infty} \\frac{x^k}{k!} = e^x, \\quad \\int_{a}^{b} f(x) \\, dx = F(b) - F(a)\n$$"
+    },
+    {
+      "case_id": "nested_sub_1",
+      "kind": "formula",
+      "group": "formulas",
+      "params": {
+        "level": 3,
+        "family": "deep_nest"
+      },
+      "primary_metric": "token_recall",
+      "primary_value": 0.8889,
+      "metrics": {
+        "token_recall": 0.8889,
+        "struct_recall": 1.0,
+        "frac_expected": 0,
+        "frac_detected": 0,
+        "frac_count_ok": true,
+        "gt_token_count": 18,
+        "got_token_count": 16
+      },
+      "categories": {
+        "Text": 1,
+        "Formula": 1
+      },
+      "filtered": false,
+      "seconds": 5.65,
+      "output_chars": 71,
+      "model_text": "$$\na_{i_{jk}}^{n^{mp}} + \\sqrt{\\sqrt{\\sqrt{x}}}\n$$"
+    },
+    {
+      "case_id": "mixed_1",
+      "kind": "formula",
+      "group": "formulas",
+      "params": {
+        "level": 2,
+        "family": "mixed"
+      },
+      "primary_metric": "token_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "token_recall": 1.0,
+        "struct_recall": 1.0,
+        "frac_expected": 1,
+        "frac_detected": 1,
+        "frac_count_ok": true,
+        "gt_token_count": 25,
+        "got_token_count": 25
+      },
+      "categories": {
+        "Text": 1,
+        "Formula": 1
+      },
+      "filtered": false,
+      "seconds": 5.88,
+      "output_chars": 91,
+      "model_text": "$$\nP(A \\mid B) = \\frac{P(B \\mid A) P(A)}{\\sum_{k} P(B \\mid A_k) P(A_k)}\n$$"
+    }
+  ]
+}

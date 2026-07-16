@@ -105,7 +105,9 @@ def score_table(model_text, gt):
 
 # ---------------------------------------------------------------- formulas
 
-_LATEX_TOKEN = re.compile(r"\\[a-zA-Z]+|\\[^a-zA-Z]|[a-zA-Z]|\d+|[_^{}&+\-*/=<>|]")
+# Braces are grouping syntax, not content: dropping them makes "x_{0}" and
+# "x_0" compare equal, so notation variance does not deflate token recall.
+_LATEX_TOKEN = re.compile(r"\\[a-zA-Z]+|\\[^a-zA-Z]|[a-zA-Z]|\d+|[_^&+\-*/=<>|]")
 
 _NORMALIZE_SUBS = [
     (r"\left", ""), (r"\right", ""),
