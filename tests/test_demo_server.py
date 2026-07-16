@@ -18,6 +18,8 @@ def load_app(tmp_path, monkeypatch, variant="mocr", autostart="0"):
     monkeypatch.setenv("DEMO_VARIANT", variant)
     monkeypatch.setenv("DEMO_AUTOSTART", autostart)
     monkeypatch.setenv("CKPTDIR", "/nonexistent")
+    monkeypatch.setenv("DEMO_PEER_PORT", "8602" if variant == "mocr" else "8601")
+    monkeypatch.setenv("DEMO_PEER_TITLE", "peer demo")
     sys.modules.pop("demo.server", None)
     server = importlib.import_module("demo.server")
     repo_root = pathlib.Path(__file__).resolve().parents[1]
@@ -70,6 +72,14 @@ def test_healthz_and_index(mocr):
     page = client.get("/")
     assert page.status_code == 200
     assert 'data-variant="mocr"' in page.text
+    assert 'id="help"' in page.text
+    assert 'id="peer-link"' in page.text
+
+
+def test_state_exposes_peer_demo(mocr):
+    _, client, _ = mocr
+    peer = client.get("/api/state").json()["peer"]
+    assert peer == {"port": "8602", "title": "peer demo"}
 
 
 def test_state_has_prompts_session_and_cookie(mocr):

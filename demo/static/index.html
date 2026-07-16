@@ -9,6 +9,7 @@
 <body data-variant="__VARIANT__">
   <header>
     <h1>__TITLE__</h1>
+    <a id="peer-link" class="badge" hidden></a>
     <div id="model-panel">
       <span id="model-state" class="badge">…</span>
       <button id="model-start">загрузить модель</button>
@@ -37,6 +38,10 @@
     </section>
 
     <section id="right">
+      <details id="help" class="panel">
+        <summary>❓ как пользоваться (что умеют модели)</summary>
+        <div id="help-body"></div>
+      </details>
       <div id="controls" class="panel">
         <label>режим
           <select id="prompt-mode"></select>

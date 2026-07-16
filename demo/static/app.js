@@ -25,6 +25,7 @@ async function pollState() {
     renderModel(data.worker);
     renderGpus(data.gpus);
     renderTasks(data.tasks);
+    initPeer(data);
     if (!state.promptModes.length) initModes(data);
   } catch (err) { /* server restarting; keep polling */ }
 }
@@ -64,6 +65,61 @@ $("keep-loaded").onchange = () => {
   body.append("value", $("keep-loaded").checked);
   fetch("/api/model/keep_loaded", {method: "POST", body}).then(pollState);
 };
+
+/* ------------------------------------------------ help & peer link */
+
+const HELP = {
+  mocr: `
+    <p>Это демка модели <b>dots.mocr</b> — парсинг документов. Генерация SVG —
+    у отдельной модели <b>dots.mocr-svg</b>, это другая демка (ссылка в шапке;
+    для неё нужен проброшенный второй порт).</p>
+    <ol>
+      <li>Перетащите <b>PDF или картинку</b> (jpg/png) в зону слева.</li>
+      <li>Отметьте галочками страницы для инференса (можно кликать по подписи страницы).</li>
+      <li>Выберите режим (скилл модели) и нажмите «Запустить».</li>
+    </ol>
+    <p>Скиллы:</p>
+    <ul>
+      <li><b>layout_all</b> — блоки страницы: bbox + категория + текст → Markdown (основной режим);</li>
+      <li><b>layout_only</b> — только детекция блоков (JSON);</li>
+      <li><b>ocr</b> — весь текст страницы;</li>
+      <li><b>grounding_ocr</b> — текст из области: выберите режим, затем <b>потяните мышкой прямоугольник прямо по странице</b>;</li>
+      <li><b>web_parsing</b> — разметка скриншота веб-страницы;</li>
+      <li><b>scene_spotting</b> — текст на фото/вывесках (координаты + текст);</li>
+      <li><b>general</b> — свободный вопрос по странице (своё поле промпта).</li>
+    </ul>
+    <p>Модель сама загрузится на GPU при первой задаче и выгрузится после простоя
+    (галочка «не выгружать» отключает выгрузку). Задачи можно останавливать в очереди —
+    даже после перезагрузки страницы.</p>`,
+  svg: `
+    <p>Это демка модели <b>dots.mocr-svg</b> — генерация SVG-кода по изображению.
+    Парсинг документов (OCR, layout) — у базовой модели dots.mocr, это другая демка
+    (ссылка в шапке).</p>
+    <ol>
+      <li>Загрузите <b>картинку (png/jpg)</b> — основной сценарий. PDF тоже можно:
+      каждая выбранная страница рендерится в картинку и превращается в SVG.</li>
+      <li>Нажмите «Запустить». Генерация SVG небыстрая (~1-3 мин на изображение).</li>
+    </ol>
+    <p>Результат: вкладка <b>SVG</b> — отрисованный вектор, <b>raw svg</b> — код,
+    <b>сравнение</b> — оригинал против рендера. Модель сильна на графиках, диаграммах
+    и простых фигурах; плотные текстовые страницы даются ей хуже (возможен битый XML —
+    смотрите raw svg).</p>
+    <p>Модель грузится на GPU при первой задаче и выгружается после простоя.</p>`,
+};
+
+function initHelp() {
+  $("help-body").innerHTML = HELP[VARIANT] || "";
+}
+initHelp();
+
+function initPeer(data) {
+  const link = $("peer-link");
+  if (!link.hidden || !data.peer || !data.peer.port) return;
+  link.textContent = `→ ${data.peer.title}`;
+  link.href = `${location.protocol}//${location.hostname}:${data.peer.port}/`;
+  link.title = "вторая демка на соседнем порту (туннель должен пробрасывать оба порта)";
+  link.hidden = false;
+}
 
 /* ------------------------------------------------ prompt modes */
 
