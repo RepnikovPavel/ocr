@@ -1,0 +1,397 @@
+{
+  "config": {
+    "ckpt": "/mnt/data2/huggingface/models--rednote-hilab--dots.mocr/snapshots/main",
+    "dpi": 200,
+    "max_pixels": 2200000,
+    "max_new_tokens": 8192,
+    "device": "cuda:0"
+  },
+  "summary": {
+    "by_kind": {
+      "algorithm": 1.0
+    },
+    "n_cases": 12,
+    "families": {
+      "algo_algorithmic": [
+        {
+          "knob": 0,
+          "case_id": "algo_algorithmic_x0_n1",
+          "score": 1.0
+        },
+        {
+          "knob": 3,
+          "case_id": "algo_algorithmic_x3_n2",
+          "score": 1.0
+        },
+        {
+          "knob": 8,
+          "case_id": "algo_algorithmic_x8_n2",
+          "score": 1.0
+        },
+        {
+          "knob": 15,
+          "case_id": "algo_algorithmic_x15_n2",
+          "score": 1.0
+        }
+      ],
+      "algo_algpseudocode": [
+        {
+          "knob": 0,
+          "case_id": "algo_algpseudocode_x0_n1",
+          "score": 1.0
+        },
+        {
+          "knob": 3,
+          "case_id": "algo_algpseudocode_x3_n2",
+          "score": 1.0
+        },
+        {
+          "knob": 8,
+          "case_id": "algo_algpseudocode_x8_n2",
+          "score": 1.0
+        },
+        {
+          "knob": 15,
+          "case_id": "algo_algpseudocode_x15_n2",
+          "score": 1.0
+        }
+      ],
+      "algo_algorithm2e": [
+        {
+          "knob": 0,
+          "case_id": "algo_algorithm2e_x0_n1",
+          "score": 1.0
+        },
+        {
+          "knob": 3,
+          "case_id": "algo_algorithm2e_x3_n2",
+          "score": 1.0
+        },
+        {
+          "knob": 8,
+          "case_id": "algo_algorithm2e_x8_n2",
+          "score": 1.0
+        },
+        {
+          "knob": 15,
+          "case_id": "algo_algorithm2e_x15_n2",
+          "score": 1.0
+        }
+      ]
+    }
+  },
+  "cases": [
+    {
+      "case_id": "algo_algorithmic_x0_n1",
+      "kind": "algorithm",
+      "group": "algo_algorithmic",
+      "params": {
+        "n_extra": 0,
+        "nesting": 1,
+        "dialect": "algorithmic"
+      },
+      "primary_metric": "identifier_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "keyword_recall": 1.0,
+        "identifier_recall": 1.0,
+        "keywords_missing": [],
+        "identifiers_missing": [],
+        "chars": 358
+      },
+      "categories": {
+        "Text": 3
+      },
+      "filtered": false,
+      "seconds": 8.78,
+      "output_chars": 358,
+      "model_text": "CASEID: algo$_a$algorithmic$_x$0$_n$1\n**Algorithm 1** Synthetic procedure GradientStep\n1: Initialize $\\theta \\leftarrow \\theta_0$\n2: Choose $\\epsilon > 0$, $\\lambda > 0$\n3: **while** $\\|grad\\| \\ge \\epsilon$ **do**\n4:     compute $grad \\leftarrow \\nabla f(\\theta)$\n5:     $\\theta \\leftarrow \\theta - \\lambda \\cdot grad$\n6: **end while**\n7: **return** $\\theta$"
+    },
+    {
+      "case_id": "algo_algorithmic_x3_n2",
+      "kind": "algorithm",
+      "group": "algo_algorithmic",
+      "params": {
+        "n_extra": 3,
+        "nesting": 2,
+        "dialect": "algorithmic"
+      },
+      "primary_metric": "identifier_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "keyword_recall": 1.0,
+        "identifier_recall": 1.0,
+        "keywords_missing": [],
+        "identifiers_missing": [],
+        "chars": 576
+      },
+      "categories": {
+        "Text": 3
+      },
+      "filtered": false,
+      "seconds": 9.83,
+      "output_chars": 576,
+      "model_text": "CASEID: algo$_a$algorithmic$_x$3$_n$2\n**Algorithm 2** Synthetic procedure GradientStep\n1: Initialize $\\theta \\leftarrow \\theta_0$\n2: Choose $\\epsilon > 0$, $\\lambda > 0$\n3: **while** $\\|grad\\| \\ge \\epsilon$ **do**\n4:     compute $grad \\leftarrow \\nabla f(\\theta)$\n5:     **if** $\\|grad\\| > 10$ **then**\n6:         $\\lambda \\leftarrow \\lambda/2$\n7:     **end if**\n8:     $\\theta \\leftarrow \\theta - \\lambda \\cdot grad$\n9:     update auxiliary variable $z_0$\n10:    update auxiliary variable $z_1$\n11:    update auxiliary variable $z_2$\n12: **end while**\n13: **return** $\\theta$"
+    },
+    {
+      "case_id": "algo_algorithmic_x8_n2",
+      "kind": "algorithm",
+      "group": "algo_algorithmic",
+      "params": {
+        "n_extra": 8,
+        "nesting": 2,
+        "dialect": "algorithmic"
+      },
+      "primary_metric": "identifier_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "keyword_recall": 1.0,
+        "identifier_recall": 1.0,
+        "keywords_missing": [],
+        "identifiers_missing": [],
+        "chars": 771
+      },
+      "categories": {
+        "Text": 3
+      },
+      "filtered": false,
+      "seconds": 11.03,
+      "output_chars": 771,
+      "model_text": "CASEID: algo$_a$algorithmic$_x$8$_n$2\n**Algorithm 3** Synthetic procedure GradientStep\n1: Initialize $\\theta \\leftarrow \\theta_0$\n2: Choose $\\epsilon > 0$, $\\lambda > 0$\n3: **while** $\\|grad\\| \\ge \\epsilon$ **do**\n4:     compute $grad \\leftarrow \\nabla f(\\theta)$\n5:     **if** $\\|grad\\| > 10$ **then**\n6:         $\\lambda \\leftarrow \\lambda/2$\n7:     **end if**\n8:     $\\theta \\leftarrow \\theta - \\lambda \\cdot grad$\n9:     update auxiliary variable $z_0$\n10:    update auxiliary variable $z_1$\n11:    update auxiliary variable $z_2$\n12:    update auxiliary variable $z_3$\n13:    update auxiliary variable $z_4$\n14:    update auxiliary variable $z_5$\n15:    update auxiliary variable $z_6$\n16:    update auxiliary variable $z_7$\n17: **end while**\n18: **return** $\\theta$"
+    },
+    {
+      "case_id": "algo_algorithmic_x15_n2",
+      "kind": "algorithm",
+      "group": "algo_algorithmic",
+      "params": {
+        "n_extra": 15,
+        "nesting": 2,
+        "dialect": "algorithmic"
+      },
+      "primary_metric": "identifier_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "keyword_recall": 1.0,
+        "identifier_recall": 1.0,
+        "keywords_missing": [],
+        "identifiers_missing": [],
+        "chars": 1060
+      },
+      "categories": {
+        "Text": 3
+      },
+      "filtered": false,
+      "seconds": 13.1,
+      "output_chars": 1060,
+      "model_text": "CASEID: algo$_a$algorithmic$_x$15$_n$2\n**Algorithm 4** Synthetic procedure GradientStep\n1: Initialize $\\theta \\leftarrow \\theta_0$\n2: Choose $\\epsilon > 0$, $\\lambda > 0$\n3: **while** $\\|grad\\| \\ge \\epsilon$ **do**\n4:     compute $grad \\leftarrow \\nabla f(\\theta)$\n5:     **if** $\\|grad\\| > 10$ **then**\n6:         $\\lambda \\leftarrow \\lambda/2$\n7:     **end if**\n8:     $\\theta \\leftarrow \\theta - \\lambda \\cdot grad$\n9:     update auxiliary variable $z_0$\n10:    update auxiliary variable $z_1$\n11:    update auxiliary variable $z_2$\n12:    update auxiliary variable $z_3$\n13:    update auxiliary variable $z_4$\n14:    update auxiliary variable $z_5$\n15:    update auxiliary variable $z_6$\n16:    update auxiliary variable $z_7$\n17:    update auxiliary variable $z_8$\n18:    update auxiliary variable $z_9$\n19:    update auxiliary variable $z_{10}$\n20:    update auxiliary variable $z_{11}$\n21:    update auxiliary variable $z_{12}$\n22:    update auxiliary variable $z_{13}$\n23:    update auxiliary variable $z_{14}$\n24: **end while**\n25: **return** $\\theta$"
+    },
+    {
+      "case_id": "algo_algpseudocode_x0_n1",
+      "kind": "algorithm",
+      "group": "algo_algpseudocode",
+      "params": {
+        "n_extra": 0,
+        "nesting": 1,
+        "dialect": "algpseudocode"
+      },
+      "primary_metric": "identifier_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "keyword_recall": 1.0,
+        "identifier_recall": 1.0,
+        "keywords_missing": [],
+        "identifiers_missing": [],
+        "chars": 423
+      },
+      "categories": {
+        "Text": 3
+      },
+      "filtered": false,
+      "seconds": 8.64,
+      "output_chars": 423,
+      "model_text": "CASEID: algo_algpseudocode_x0_n1\n**Algorithm 1** Synthetic procedure BinarySearch\n1: **procedure** BINARYSEARCH($A, target$)\n2:     $lo \\leftarrow 1, hi \\leftarrow n$\n3:     **while** $lo \\le hi$ **do**\n4:         $mid \\leftarrow \\lfloor (lo + hi)/2 \\rfloor$\n5:         **if** $A[mid] = target$ **then**\n6:             **return** $mid$\n7:         **end if**\n8:     **end while**\n9:     **return** $-1$\n10: **end procedure**"
+    },
+    {
+      "case_id": "algo_algpseudocode_x3_n2",
+      "kind": "algorithm",
+      "group": "algo_algpseudocode",
+      "params": {
+        "n_extra": 3,
+        "nesting": 2,
+        "dialect": "algpseudocode"
+      },
+      "primary_metric": "identifier_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "keyword_recall": 1.0,
+        "identifier_recall": 1.0,
+        "keywords_missing": [],
+        "identifiers_missing": [],
+        "chars": 663
+      },
+      "categories": {
+        "Text": 3
+      },
+      "filtered": false,
+      "seconds": 10.81,
+      "output_chars": 663,
+      "model_text": "CASEID: algo_algpseudocode_x3n2\n**Algorithm 2** Synthetic procedure BinarySearch\n1: **procedure** BINARYSEARCH($A, target$)\n2:     $lo \\leftarrow 1, hi \\leftarrow n$\n3:     **while** $lo \\le hi$ **do**\n4:         $mid \\leftarrow \\lfloor (lo + hi)/2 \\rfloor$\n5:         **if** $A[mid] = target$ **then**\n6:             **return** $mid$\n7:         **end if**\n8:         **if** $A[mid] < target$ **then**\n9:             $lo \\leftarrow mid + 1$\n10:        **else**\n11:        $hi \\leftarrow mid - 1$\n12:    **end if**\n13:    auxiliary step $s_0$\n14:    auxiliary step $s_1$\n15:    auxiliary step $s_2$\n16:    **end while**\n17:    **return** $-1$\n18: **end procedure**"
+    },
+    {
+      "case_id": "algo_algpseudocode_x8_n2",
+      "kind": "algorithm",
+      "group": "algo_algpseudocode",
+      "params": {
+        "n_extra": 8,
+        "nesting": 2,
+        "dialect": "algpseudocode"
+      },
+      "primary_metric": "identifier_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "keyword_recall": 1.0,
+        "identifier_recall": 1.0,
+        "keywords_missing": [],
+        "identifiers_missing": [],
+        "chars": 803
+      },
+      "categories": {
+        "Text": 3
+      },
+      "filtered": false,
+      "seconds": 11.83,
+      "output_chars": 803,
+      "model_text": "CASEID: algo_algpseudocode_x8n2\n**Algorithm 3** Synthetic procedure BinarySearch\n1: **procedure** BINARYSEARCH($A, target$)\n2:     $lo \\leftarrow 1, hi \\leftarrow n$\n3:     **while** $lo \\le hi$ **do**\n4:         $mid \\leftarrow \\lfloor (lo + hi)/2 \\rfloor$\n5:         **if** $A[mid] = target$ **then**\n6:             **return** $mid$\n7:         **end if**\n8:         **if** $A[mid] < target$ **then**\n9:             $lo \\leftarrow mid + 1$\n10:        **else**\n11:        $hi \\leftarrow mid - 1$\n12:    **end if**\n13:    auxiliary step $s_0$\n14:    auxiliary step $s_1$\n15:    auxiliary step $s_2$\n16:    auxiliary step $s_3$\n17:    auxiliary step $s_4$\n18:    auxiliary step $s_5$\n19:    auxiliary step $s_6$\n20:    auxiliary step $s_7$\n21:    **end while**\n22:    **return** $-1$\n23: **end procedure**"
+    },
+    {
+      "case_id": "algo_algpseudocode_x15_n2",
+      "kind": "algorithm",
+      "group": "algo_algpseudocode",
+      "params": {
+        "n_extra": 15,
+        "nesting": 2,
+        "dialect": "algpseudocode"
+      },
+      "primary_metric": "identifier_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "keyword_recall": 1.0,
+        "identifier_recall": 1.0,
+        "keywords_missing": [],
+        "identifiers_missing": [],
+        "chars": 1016
+      },
+      "categories": {
+        "Text": 3
+      },
+      "filtered": false,
+      "seconds": 13.72,
+      "output_chars": 1016,
+      "model_text": "CASEID: algo_algpseudocode_x15_n2\n**Algorithm 4** Synthetic procedure BinarySearch\n1: **procedure** BINARYSEARCH($A, target$)\n2:     $lo \\leftarrow 1, hi \\leftarrow n$\n3:     **while** $lo \\le hi$ **do**\n4:         $mid \\leftarrow \\lfloor (lo + hi)/2 \\rfloor$\n5:         **if** $A[mid] = target$ **then**\n6:             **return** $mid$\n7:         **end if**\n8:         **if** $A[mid] < target$ **then**\n9:             $lo \\leftarrow mid + 1$\n10:        **else**\n11:        $hi \\leftarrow mid - 1$\n12:    **end if**\n13:    auxiliary step $s_0$\n14:    auxiliary step $s_1$\n15:    auxiliary step $s_2$\n16:    auxiliary step $s_3$\n17:    auxiliary step $s_4$\n18:    auxiliary step $s_5$\n19:    auxiliary step $s_6$\n20:    auxiliary step $s_7$\n21:    auxiliary step $s_8$\n22:    auxiliary step $s_9$\n23:    auxiliary step $s_{10}$\n24:    auxiliary step $s_{11}$\n25:    auxiliary step $s_{12}$\n26:    auxiliary step $s_{13}$\n27:    auxiliary step $s_{14}$\n28:    **end while**\n29:    **return** $-1$\n30: **end procedure**"
+    },
+    {
+      "case_id": "algo_algorithm2e_x0_n1",
+      "kind": "algorithm",
+      "group": "algo_algorithm2e",
+      "params": {
+        "n_extra": 0,
+        "nesting": 1,
+        "dialect": "algorithm2e"
+      },
+      "primary_metric": "identifier_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "keyword_recall": 1.0,
+        "identifier_recall": 1.0,
+        "keywords_missing": [],
+        "identifiers_missing": [],
+        "chars": 347
+      },
+      "categories": {
+        "Text": 8
+      },
+      "filtered": false,
+      "seconds": 11.28,
+      "output_chars": 347,
+      "model_text": "CASEID: algo\\_algorithm2e\\_x0\\_n1\n**Algorithm 2:** Synthetic procedure Partition\nInput: array $arr$, indices $left$, $right$\nOutput: pivot index\n$pivot \\leftarrow arr[right];$\n$i \\leftarrow left - 1;$\nfor $j \\leftarrow left$ to $right - 1$ do\n  if $arr[j] \\le pivot$ then\n    $i \\leftarrow i + 1;$\n    swap $arr[i]$ and $arr[j];$\n  return $i + 1;$"
+    },
+    {
+      "case_id": "algo_algorithm2e_x3_n2",
+      "kind": "algorithm",
+      "group": "algo_algorithm2e",
+      "params": {
+        "n_extra": 3,
+        "nesting": 2,
+        "dialect": "algorithm2e"
+      },
+      "primary_metric": "identifier_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "keyword_recall": 1.0,
+        "identifier_recall": 1.0,
+        "keywords_missing": [],
+        "identifiers_missing": [],
+        "chars": 437
+      },
+      "categories": {
+        "Text": 14
+      },
+      "filtered": false,
+      "seconds": 15.99,
+      "output_chars": 437,
+      "model_text": "CASEID: algo\\_algorithm2e\\_x3\\_n2\n**Algorithm 4:** Synthetic procedure Partition\nInput: array $arr$, indices $left$, $right$\nOutput: pivot index\n$pivot \\leftarrow arr[right];$\n$i \\leftarrow left - 1;$\nfor $j \\leftarrow left$ to $right - 1$ do\n  if $arr[j] \\le pivot$ then\n    $i \\leftarrow i + 1;$\n    swap $arr[i]$ and $arr[j];$\nwhile $i > left$ do\n  $i \\leftarrow i - 1;$\naux step $t_0;$\naux step $t_1;$\naux step $t_2;$\nreturn $i + 1;$"
+    },
+    {
+      "case_id": "algo_algorithm2e_x8_n2",
+      "kind": "algorithm",
+      "group": "algo_algorithm2e",
+      "params": {
+        "n_extra": 8,
+        "nesting": 2,
+        "dialect": "algorithm2e"
+      },
+      "primary_metric": "identifier_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "keyword_recall": 1.0,
+        "identifier_recall": 1.0,
+        "keywords_missing": [],
+        "identifiers_missing": [],
+        "chars": 511
+      },
+      "categories": {
+        "Text": 19
+      },
+      "filtered": false,
+      "seconds": 19.83,
+      "output_chars": 511,
+      "model_text": "CASEID: algo_algorithm2e_x8n2\n**Algorithm 6:** Synthetic procedure Partition\nInput: array $arr$, indices $left, right$\nOutput: pivot index\n$pivot \\leftarrow arr[right];$\n$i \\leftarrow left - 1;$\nfor $j \\leftarrow left$ to $right - 1$ do\n  if $arr[j] \\le pivot$ then\n    $i \\leftarrow i + 1;$\n    swap $arr[i]$ and $arr[j];$\nwhile $i > left$ do\n  $i \\leftarrow i - 1;$\naux step $t_0;$\naux step $t_1;$\naux step $t_2;$\naux step $t_3;$\naux step $t_4;$\naux step $t_5;$\naux step $t_6;$\naux step $t_7;$\nreturn $i + 1;$"
+    },
+    {
+      "case_id": "algo_algorithm2e_x15_n2",
+      "kind": "algorithm",
+      "group": "algo_algorithm2e",
+      "params": {
+        "n_extra": 15,
+        "nesting": 2,
+        "dialect": "algorithm2e"
+      },
+      "primary_metric": "identifier_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "keyword_recall": 1.0,
+        "identifier_recall": 1.0,
+        "keywords_missing": [],
+        "identifiers_missing": [],
+        "chars": 643
+      },
+      "categories": {
+        "Text": 26
+      },
+      "filtered": false,
+      "seconds": 25.58,
+      "output_chars": 643,
+      "model_text": "CASEID: algo_aalgorithm2e_x15_n2\n**Algorithm 8:** Synthetic procedure Partition\nInput: array $arr$, indices $left$, $right$\nOutput: pivot index\n$pivot \\leftarrow arr[right];$\n$i \\leftarrow left - 1;$\nfor $j \\leftarrow left$ to $right - 1$ do\n  if $arr[j] \\le pivot$ then\n    $i \\leftarrow i + 1;$\n    swap $arr[i]$ and $arr[j];$\nwhile $i > left$ do\n  $i \\leftarrow i - 1;$\naux step $t_0;$\naux step $t_1;$\naux step $t_2;$\naux step $t_3;$\naux step $t_4;$\naux step $t_5;$\naux step $t_6;$\naux step $t_7;$\naux step $t_8;$\naux step $t_9;$\naux step $t_{10};$\naux step $t_{11};$\naux step $t_{12};$\naux step $t_{13};$\naux step $t_{14};$\nreturn $i + 1;$"
+    }
+  ]
+}
