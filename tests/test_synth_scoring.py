@@ -96,6 +96,14 @@ def test_score_formula_perfect_and_normalization():
     assert result["frac_count_ok"] is True
 
 
+def test_score_formula_brace_notation_variance_does_not_penalize():
+    # subscripts/superscripts written with or without braces are equivalent
+    gt = {"latex": r"c_{k} x^{k} + a_{1}"}
+    model = r"c_k x^k + a_1"
+    result = scoring.score_formula(model, gt)
+    assert result["token_recall"] == 1.0
+
+
 def test_score_formula_monotonic_degradation():
     gt = {"latex": r"\frac{x + a}{b + \frac{y}{z}}"}
     perfect = scoring.score_formula(r"\frac{x + a}{b + \frac{y}{z}}", gt)["token_recall"]
