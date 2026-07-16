@@ -359,6 +359,49 @@ window.cancelTask = (id) => fetch(`/api/tasks/${id}/cancel`, {method: "POST"}).t
 
 /* ------------------------------------------------ results */
 
+/* Render model markdown with LaTeX math.
+   marked.js mangles TeX ($x_i^l$ -> emphasis), so we lift math spans out
+   BEFORE markdown, run marked + sanitize on the rest, then splice the math
+   back as MathJax \(...\)/\[...\] delimiters and typeset. */
+function renderMarkdownWithMath(src) {
+  const math = [];
+  const stash = (display, tex) => `MJXMATH${math.push({ display, tex }) - 1}END`;
+  // display $$...$$ first, then inline $...$ (allow escaped \$ inside)
+  let protectedSrc = (src || "")
+    .replace(/\$\$([\s\S]+?)\$\$/g, (_, tex) => stash(true, tex))
+    .replace(/\\\[([\s\S]+?)\\\]/g, (_, tex) => stash(true, tex))
+    .replace(/(?<![\\$])\$((?:[^$\\\n]|\\.)+?)\$(?!\$)/g, (_, tex) => stash(false, tex))
+    .replace(/\\\(([\s\S]+?)\\\)/g, (_, tex) => stash(false, tex));
+
+  let html = sanitizeHtml(marked.parse(protectedSrc));
+
+  // restore placeholders (which survived markdown/sanitize) as escaped TeX
+  html = html.replace(/MJXMATH(\d+)END/g, (_, i) => {
+    const { display, tex } = math[Number(i)];
+    const esc = tex.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return display
+      ? `<span class="math-display">\\[${esc}\\]</span>`
+      : `<span class="math-inline">\\(${esc}\\)</span>`;
+  });
+  return html;
+}
+
+function typesetMath(el) {
+  if (!(window.MathJax && MathJax.typesetPromise)) return;
+  MathJax.typesetPromise([el]).then(() => {
+    // MathJax \href can emit clickable links from untrusted TeX — strip
+    // javascript:/vbscript:/data: schemes MathJax generated during typeset.
+    el.querySelectorAll("a").forEach((a) => {
+      for (const name of ["href", "xlink:href"]) {
+        const v = a.getAttribute(name);
+        if (v && /^(javascript|vbscript|data):/i.test(v.replace(/[\u0000-\u0020]/g, "").toLowerCase())) {
+          a.removeAttribute(name);
+        }
+      }
+    });
+  }).catch((e) => console.warn("MathJax:", e));
+}
+
 /* model output (markdown/svg) is injected as HTML: strip active content */
 function sanitizeHtml(html) {
   const tpl = document.createElement("template");
@@ -443,7 +486,9 @@ function resultCard(page) {
   if (urls.md_content) {
     const tab = addTab(urls.svg_content ? "md" : "MD", async (el) => {
       el.innerHTML = `<div class="md-render"></div>`;
-      el.querySelector(".md-render").innerHTML = sanitizeHtml(marked.parse(await rawFetch(urls.md_content)));
+      const target = el.querySelector(".md-render");
+      target.innerHTML = renderMarkdownWithMath(await rawFetch(urls.md_content));
+      typesetMath(target);
     }, !first);
     first = first || tab;
     addTab("raw md", async (el) => {

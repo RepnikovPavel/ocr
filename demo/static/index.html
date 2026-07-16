@@ -76,6 +76,17 @@
   </main>
 
   <script src="/static/marked.min.js"></script>
+  <script>
+    // MathJax config must be set before the bundle loads. We convert parsed
+    // formulas to \(...\) / \[...\] and typeset on demand (no page-wide scan).
+    window.MathJax = {
+      tex: { inlineMath: [['\\(', '\\)']], displayMath: [['\\[', '\\]']] },
+      svg: { fontCache: 'local' },
+      options: { enableMenu: false, skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'] },
+      startup: { typeset: false },
+    };
+  </script>
+  <script src="/static/tex-svg.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>
