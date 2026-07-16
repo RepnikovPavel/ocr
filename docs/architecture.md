@@ -230,7 +230,7 @@ $$
 
 Параметры (сверено, сумма точно даёт заявленные 3.04B):
 $$
-\underbrace{P_{vis}\approx1.26\text{B}}_{42\times28.9\text{M}}
+\underbrace{P_{vis}\approx1.26\text{B}}_{42\times28.9\text{M}\ +\ \text{merger }47\text{M}\ +\ \text{patch-embed }0.9\text{M}}
 + \underbrace{P_{llm}^{\text{non-emb}}\approx1.31\text{B}}_{28\times46.8\text{M}}
 + \underbrace{\text{Embed}+\text{lm\_head}=2\times233\text{M}}_{\text{vocab }V\text{ большой}}
 = 3.04\text{B}\ (6.08\text{ GB bf16})
@@ -244,17 +244,20 @@ FLOP-структура (на страницу, $N_v\approx11224$, $S\approx3050
 | Vision SwiGLU | $6 L_v N_v d I_v$ | 18.4 TFLOP | 31% |
 | Vision QKV/proj | $8 L_v N_v d^2$ | 8.9 TFLOP | 15% |
 | **Vision итого** | | **≈ 60 TFLOP** | |
-| LLM prefill (linear) | $2 L\, S\,(2d^2 + 2\cdot d\cdot d_{kv} + 3 d I)$ | 7.9 TFLOP | |
-| LLM prefill (attn) | $\sim 2 L S^2 d$ | 0.8 TFLOP | |
+| LLM prefill (linear) | $2 L\, S\,(2d^2 + 2\cdot d\cdot d_{kv} + 3 d I)$ | 8.0 TFLOP | |
+| LLM prefill (attn, каузальная $\approx\tfrac12\cdot4LS^2d$) | $\sim 2 L S^2 d$ | 0.8 TFLOP | |
 | **Prefill итого (до 1-го токена)** | | **≈ 69 TFLOP** | |
-| LLM decode / токен | $2\,(L\cdot46.8\text{M} + d\,V)$ | **≈ 3.1 GFLOP** | |
+| LLM decode / токен (linear) | $2\,(L\cdot46.8\text{M} + d\,V)$ | ≈ 3.1 GFLOP | |
+| LLM decode / токен (+attn по KV) | $+\,4 L S d$ | **≈ 3.6 GFLOP** при $S{\approx}3050$ | |
 
 Связь с измеренным (RTX 4090, dpi 150–200, `reports/benchmark_2x4090_2026-07-15.md`):
 
-- **TTFT ≈ 3.5 с** на ~69 TFLOP $\Rightarrow$ ~20 TFLOP/s $\approx$ 12% от bf16-пика 4090
-  (~165 TFLOP/s). Vision-attention — доминирующий и **квадратичный по $N_v$** член:
-  удвоение разрешения → ×4 стоимости и памяти (отсюда OOM выше 2.2M px).
-- **Decode 40–47 tok/s, util ~38%.** За токен стримится
+- **TTFT ≈ 3.5 с**: замер сделан при 150 dpi ($N_v{\approx}10856$, $S{\approx}2930$), что
+  соответствует ~65 TFLOP $\Rightarrow$ ~19 TFLOP/s $\approx$ 11% от bf16-пика 4090
+  (~165 TFLOP/s); при $N_v{=}11224$ работа ≈69 TFLOP. Vision-attention — доминирующий и
+  **квадратичный по $N_v$** член: удвоение разрешения → ×4 стоимости и памяти (отсюда
+  OOM выше 2.2M px).
+- **Decode 43.8–47.6 tok/s, util ~38–41%.** За токен стримится
   $P_{llm}^{\text{non-emb}} + \text{lm\_head} \approx 3.09$ ГБ весов bf16. Bandwidth-roofline
   $= 1008\ \text{ГБ/с} / 3.09\ \text{ГБ} \approx 320$ tok/s. Измеренные 47 = **~14% от
   roofline** $\Rightarrow$ декод упирается **не в память, а в launch-overhead** (per-token
@@ -270,16 +273,21 @@ $$
 ## 7. Поверхность оптимизации (в порядке ожидаемой отдачи)
 
 1. **Декод launch-bound (14% от roofline) → устранить per-token overhead.**
-   CUDA Graphs + статические шейпы декода; либо подмена движка на **TRT-LLM / vLLM**
-   (paged-attention, фьюзы, cuda-graphs из коробки). Цель — приблизиться к ~320 tok/s.
+   CUDA Graphs + статические шейпы декода; либо подмена движка на **vLLM / TRT-LLM**
+   (paged-attention, фьюзы, cuda-graphs из коробки). vLLM — официальный путь авторов:
+   dots.mocr интегрирован в vLLM с версии 0.11.0 («verified performance»), готовая
+   команда `vllm serve` в upstream README. Цель — приблизиться к ~320 tok/s.
    Наибольший выигрыш end-to-end на длинных выдачах OCR.
 
 2. **Vision использует `sdpa` (дефолт cli) → материализует маску $N_v\times N_v$.**
    При $N_v\approx11224$: bool-маска 126 МБ, но SDPA внутри разворачивает scores
-   $h_q\times N_v^2$ (bf16 ~2.4 ГБ) + float32 softmax — это и есть драйвер OOM и потолок
+   $h_q\times N_v^2$ (bf16 $12\cdot11224^2\cdot2\,\text{B}\approx3.0$ ГБ) + float32 softmax — это и есть драйвер OOM и потолок
    разрешения. Поставить **flash-attn** и `attn_implementation="flash_attention_2"`
    для vision: варленовое внимание одним сегментом `cu_seqlens=[0,N_v]`, без
    материализации $\Rightarrow$ память $O(N_v)$, выше dpi, быстрее prefill.
+   Это **авторская референс-конфигурация**: upstream `_load_hf_model` грузит всю модель
+   с `flash_attention_2` и рекомендует `flash-attn==2.8.0.post2`; sdpa-дефолт —
+   отступление нашего форка.
 
 3. **Фьюзы ядер (prefill-bound).** (a) `RMSNorm→qkv` и `RMSNorm→SwiGLU` эпилогом, чтобы
    убрать два HBM round-trip $[N_v,1536]$ на блок ×42. (b) SwiGLU: `fc1,fc3` одним GEMM
@@ -304,6 +312,12 @@ $$
 ---
 
 ## 8. Опорные точки для регрессии (для «оптимизации с регрессионными тестами»)
+
+Ограничение задачи — **inference-only**: веса и математика модели не меняются, ответы
+должны совпадать с авторскими. Эталон — **авторская референс-конфигурация**: HF bf16 с
+`attn_implementation="flash_attention_2"` (так модель грузит upstream `_load_hf_model`),
+greedy. Разрешены только математически эквивалентные перестановки (расписание ядер:
+graphs/flash/фьюзы/paged-KV/батч); квантование весов или KV — вне рамок.
 
 Что держать инвариантным при любой оптимизации (match-тесты в духе
 `myadvise.md` — «доказать, что ответы совпадают»):
