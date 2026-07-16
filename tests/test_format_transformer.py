@@ -38,7 +38,8 @@ def test_clean_latex_preamble():
     assert "x=1" in out
 
 
-def test_layoutjson2md_text_formula_picture(synthetic_page_image):
+def test_layoutjson2md_text_formula_picture_base64_fallback(synthetic_page_image):
+    # without image_dir the legacy standalone base64 embed is kept
     cells = [
         {"bbox": [0, 0, 100, 40], "category": "Title", "text": "# Heading"},
         {"bbox": [0, 50, 100, 90], "category": "Formula", "text": r"\alpha + \beta"},
@@ -50,6 +51,32 @@ def test_layoutjson2md_text_formula_picture(synthetic_page_image):
     assert "$$" in md and r"\alpha" in md
     assert "![](data:image/png;base64," in md
     assert "page 1" in md
+
+
+def test_layoutjson2md_pictures_saved_to_folder_with_relative_links(synthetic_page_image, tmp_path):
+    import os
+
+    cells = [
+        {"bbox": [0, 0, 100, 40], "category": "Title", "text": "# Heading"},
+        {"bbox": [0, 100, 200, 300], "category": "Picture"},
+        {"bbox": [0, 320, 180, 460], "category": "Picture"},
+    ]
+    image_dir = str(tmp_path / "images")
+    md = layoutjson2md(synthetic_page_image, cells, image_dir=image_dir,
+                       rel_prefix="images", name="p0")
+    # markdown carries relative links only — no base64 blobs
+    assert "data:image" not in md
+    assert "![](images/p0_pic_0.png)" in md
+    assert "![](images/p0_pic_1.png)" in md
+    # the crops are real files on disk
+    assert os.path.isfile(os.path.join(image_dir, "p0_pic_0.png"))
+    assert os.path.isfile(os.path.join(image_dir, "p0_pic_1.png"))
+
+
+def test_layoutjson2md_skips_degenerate_picture_bbox(synthetic_page_image, tmp_path):
+    cells = [{"bbox": [50, 50, 50, 90], "category": "Picture"}]  # zero width
+    md = layoutjson2md(synthetic_page_image, cells, image_dir=str(tmp_path / "im"), name="p")
+    assert "![](" not in md  # degenerate crop skipped, no broken link
 
 
 def test_layoutjson2md_no_page_hf_skips_header_footer(synthetic_page_image):

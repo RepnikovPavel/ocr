@@ -214,6 +214,23 @@ def test_model_start_stop_endpoints(mocr):
     assert server.WORKER.paused
 
 
+def test_device_selection_endpoint_and_state(mocr):
+    server, client, _ = mocr
+    state = client.get("/api/state").json()
+    assert "devices" in state and "auto" in state["devices"] and "cpu" in state["devices"]
+    assert "configured_device" in state["worker"]
+
+    # switching to a listed device is accepted and reflected
+    res = client.post("/api/model/device", data={"device": "cpu"})
+    assert res.status_code == 200, res.text
+    assert res.json()["configured_device"] == "cpu"
+    assert wait_for(lambda: server.WORKER.device == "cpu")
+
+    # an unavailable device is rejected
+    bad = client.post("/api/model/device", data={"device": "cuda:99"})
+    assert bad.status_code == 400
+
+
 def test_keep_loaded_endpoint_and_state_fields(mocr):
     server, client, _ = mocr
     res = client.post("/api/model/keep_loaded", data={"value": "true"})

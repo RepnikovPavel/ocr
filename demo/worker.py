@@ -83,6 +83,7 @@ class DemoWorker(threading.Thread):
         self.abort_event = threading.Event()
         self._last_used = time.time()
         self._load_now = autostart         # explicit load request pending
+        self._reload_requested = False     # device changed -> unload + reload
         self._wakeup = threading.Event()
         self._shutdown = threading.Event()
 
@@ -103,6 +104,21 @@ class DemoWorker(threading.Thread):
 
     def set_keep_loaded(self, value):
         self.keep_loaded = bool(value)
+        self._wakeup.set()
+
+    def set_device(self, device):
+        """Switch the inference GPU (e.g. 'cuda:0' -> 'cuda:1').
+
+        Aborts any running generation, unloads the model, and reloads it on the
+        new device (immediately if it was loaded / keep_loaded, else lazily on
+        the next task). No-op if unchanged.
+        """
+        if not device or device == self.device:
+            return
+        self.device = device
+        self.paused = False
+        self._reload_requested = True
+        self.abort_event.set()
         self._wakeup.set()
 
     def notify_new_task(self):
@@ -138,6 +154,7 @@ class DemoWorker(threading.Thread):
             "unload_in_seconds": unload_in,
             "current_task_id": self.current_task_id,
             "device": getattr(self.parser, "device", None) if self.parser else None,
+            "configured_device": self.device,  # user-selected target (even when unloaded)
         }
 
     # ------------------------------------------------------------ model
@@ -193,6 +210,13 @@ class DemoWorker(threading.Thread):
 
     def run(self):
         while not self._shutdown.is_set():
+            if self._reload_requested:
+                self._reload_requested = False
+                was_loaded = self.model_state == "loaded"
+                self._unload_model()
+                if was_loaded or self.keep_loaded:
+                    self._load_now = True  # reload on the new device
+
             if self.paused:
                 if self.model_state == "loaded":
                     self._unload_model()

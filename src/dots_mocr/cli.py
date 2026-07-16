@@ -289,8 +289,13 @@ class DotsMOCRParser:
                     'layout_image_path': image_layout_path,
                 })
                 if prompt_mode != "prompt_layout_only_en":
-                    md_content = layoutjson2md(origin_image, cells, text_key='text')
-                    md_content_no_hf = layoutjson2md(origin_image, cells, text_key='text', no_page_hf=True)
+                    # Picture crops go to a sibling images/ folder; the markdown
+                    # carries only relative links (token-cheap for downstream agents)
+                    image_dir = os.path.join(save_dir, "images")
+                    md_content = layoutjson2md(origin_image, cells, text_key='text',
+                                               image_dir=image_dir, rel_prefix="images", name=save_name)
+                    md_content_no_hf = layoutjson2md(origin_image, cells, text_key='text', no_page_hf=True,
+                                                     image_dir=image_dir, rel_prefix="images", name=save_name)
                     md_file_path = os.path.join(save_dir, f"{save_name}.md")
                     with open(md_file_path, "w", encoding="utf-8") as md_file:
                         md_file.write(md_content)

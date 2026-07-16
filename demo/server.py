@@ -193,12 +193,16 @@ def api_state(request: Request):
 
     sid = request.state.sid
     config = VARIANTS[VARIANT]
+    gpus = gpu_snapshot()
+    # selectable inference devices: every visible GPU + auto (+ cpu for fallback)
+    devices = ["auto"] + [f"cuda:{g['index']}" for g in gpus] + ["cpu"]
     return {
         "variant": VARIANT,
         "title": config["title"],
         "peer": {"port": PEER_PORT, "title": PEER_TITLE} if PEER_PORT else None,
         "server_time": _time.time(),
         "ckpt": CKPTDIR,
+        "devices": devices,
         "prompt_modes": [
             {
                 "mode": mode,
@@ -209,7 +213,7 @@ def api_state(request: Request):
         ],
         "default_mode": config["default_mode"],
         "worker": WORKER.status(),
-        "gpus": gpu_snapshot(),
+        "gpus": gpus,
         "session": {"id": sid, "jobs": db.list_jobs(sid)},
         "tasks": [
             {**_task_public(task), "own": task["session_id"] == sid}
@@ -395,6 +399,16 @@ def api_model_stop():
 def api_model_keep_loaded(value: bool = Form(...)):
     """do_not_unload_model: keep the model on the GPU between tasks."""
     WORKER.set_keep_loaded(value)
+    return WORKER.status()
+
+
+@app.post("/api/model/device")
+def api_model_device(device: str = Form(...)):
+    """Choose which GPU (or auto/cpu) runs inference; reloads the model there."""
+    allowed = {"auto", "cpu"} | {f"cuda:{g['index']}" for g in gpu_snapshot()}
+    if device not in allowed:
+        raise HTTPException(400, f"device must be one of {sorted(allowed)}")
+    WORKER.set_device(device)
     return WORKER.status()
 
 
