@@ -215,9 +215,11 @@ def api_state(request: Request):
         "worker": WORKER.status(),
         "gpus": gpus,
         "session": {"id": sid, "jobs": db.list_jobs(sid)},
+        # only the live queue (queued/running) — finished tasks drop off so the
+        # panel stays small and never shows stale runs from old sessions
         "tasks": [
             {**_task_public(task), "own": task["session_id"] == sid}
-            for task in db.list_tasks(limit=30)
+            for task in db.list_active_tasks(limit=30)
         ],
     }
 

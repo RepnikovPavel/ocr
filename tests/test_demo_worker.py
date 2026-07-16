@@ -91,6 +91,24 @@ def test_worker_executes_pdf_task(env):
         worker.shutdown()
 
 
+def test_worker_processes_all_pages_of_pdf(env):
+    # regression: pressing "run" with the default (all pages) selection must
+    # parse the WHOLE pdf, not just a couple pages
+    worker, stub = make_worker(env)
+    try:
+        job = db.get_job(env["job_id"])
+        all_pages = list(range(job["num_pages"]))  # synthetic pdf has 3 pages
+        assert len(all_pages) == 3
+        task_id = db.create_task(env["sid"], env["job_id"], "prompt_ocr", all_pages, {})
+        assert wait_for(lambda: db.get_task(task_id)["status"] == "done")
+        task = db.get_task(task_id)
+        assert [r["page_no"] for r in task["result"]] == all_pages
+        assert task["progress"] == {"done": 3, "total": 3}
+        assert {c["page"] for c in stub.calls} == set(all_pages)
+    finally:
+        worker.shutdown()
+
+
 def test_worker_cancel_running_preserves_finished_pages(env):
     worker, _ = make_worker(env, StubParser(delay=0.5))
     try:

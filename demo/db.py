@@ -149,18 +149,26 @@ def get_task(task_id):
         return _row_to_task(row)
 
 
-def list_tasks(limit=50, session_id=None):
+def list_tasks(limit=50, session_id=None, statuses=None):
+    where, params = [], []
+    if session_id:
+        where.append("session_id=?")
+        params.append(session_id)
+    if statuses:
+        where.append("status IN (%s)" % ",".join("?" for _ in statuses))
+        params.extend(statuses)
+    clause = ("WHERE " + " AND ".join(where)) if where else ""
+    params.append(limit)
     with _connect() as conn:
-        if session_id:
-            rows = conn.execute(
-                "SELECT * FROM tasks WHERE session_id=? ORDER BY created_at DESC LIMIT ?",
-                (session_id, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?", (limit,),
-            ).fetchall()
+        rows = conn.execute(
+            f"SELECT * FROM tasks {clause} ORDER BY created_at DESC LIMIT ?", params,
+        ).fetchall()
         return [_row_to_task(row) for row in rows]
+
+
+def list_active_tasks(limit=50):
+    """Only queued/running tasks — the live queue (finished ones drop off)."""
+    return list_tasks(limit=limit, statuses=("queued", "running"))
 
 
 def has_queued_tasks():
