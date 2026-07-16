@@ -231,11 +231,23 @@ def formula_cases():
 
 # -------------------------------------------------------------- algorithms
 
-_ALG_KEYWORDS = {
-    "algorithmic": {"for", "while", "if", "then", "do", "return", "end"},
-    "algpseudocode": {"for", "while", "if", "then", "do", "return", "end", "procedure"},
-    "algorithm2e": {"for", "while", "if", "return"},
-}
+def _expected_keywords(dialect, nesting):
+    """Keywords that actually RENDER for a given case (not the whole dialect).
+
+    A small algorithm without a FOR loop must not be scored against 'for' —
+    the metric measures whether the keywords that ARE present survive OCR.
+    """
+    if dialect == "algorithmic":
+        kw = {"while", "do", "end", "return"}
+        if nesting >= 2:
+            kw |= {"if", "then"}
+    elif dialect == "algpseudocode":
+        kw = {"procedure", "while", "do", "if", "then", "return", "end"}
+    else:  # algorithm2e
+        kw = {"for", "if", "return"}
+        if nesting >= 2:
+            kw |= {"while"}
+    return sorted(kw)
 
 
 def _algorithmic_body(n_extra, nesting):
@@ -330,7 +342,7 @@ def algorithm_cases():
             case_id = f"{group}_x{n_extra}_n{nesting}"
             gt = {
                 "dialect": dialect_key[group],
-                "keywords": sorted(_ALG_KEYWORDS[dialect_key[group]]),
+                "keywords": _expected_keywords(dialect_key[group], nesting),
                 "identifiers": idents,
                 "n_extra": n_extra,
                 "nesting": nesting,
