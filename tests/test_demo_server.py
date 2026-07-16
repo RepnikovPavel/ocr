@@ -142,9 +142,10 @@ def test_task_end_to_end_with_stub_model(mocr):
     assert raw.status_code == 200
     assert "# page 0" in raw.json()["content"]
 
+    # a finished task drops off the live queue but stays queryable by id
     state = client.get("/api/state").json()
-    ours = [t for t in state["tasks"] if t["id"] == task_id]
-    assert ours and ours[0]["own"] is True
+    assert task_id not in [t["id"] for t in state["tasks"]]
+    assert client.get(f"/api/tasks/{task_id}").json()["status"] == "done"
 
 
 def test_task_validation(mocr):
@@ -212,6 +213,19 @@ def test_model_start_stop_endpoints(mocr):
     client.post("/api/model/stop")
     assert wait_for(lambda: server.WORKER.model_state == "stopped")
     assert server.WORKER.paused
+
+
+def test_state_lists_only_active_tasks(mocr):
+    server, client, _ = mocr
+    from demo import db
+    job = upload_pdf(client)
+    # a queued task shows; a finished one does not clutter the queue
+    active_id = db.create_task("s", job["job_id"], "prompt_ocr", [0], {})
+    done_id = db.create_task("s", job["job_id"], "prompt_ocr", [1], {})
+    db.update_task(done_id, status="done", result=[{"page_no": 1}])
+    ids = [t["id"] for t in client.get("/api/state").json()["tasks"]]
+    assert active_id in ids
+    assert done_id not in ids
 
 
 def test_device_selection_endpoint_and_state(mocr):

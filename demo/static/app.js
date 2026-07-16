@@ -10,6 +10,8 @@ const state = {
   bbox: null,           // {page, x1, y1, x2, y2} in view-image pixels
   watching: null,       // task id whose results are rendered
   watchTimer: null,
+  resultTaskId: null,   // task whose cards are currently in #results
+  renderedPages: new Set(), // page_no already appended (incremental render)
   promptModes: [],
   estimates: {},        // prompt_mode -> seconds per page (from benchmarks)
   timeOffset: 0,        // server_time - client_time, seconds
@@ -357,7 +359,13 @@ function formatEta(seconds) {
 }
 
 function renderTasks(tasks) {
-  $("tasks").innerHTML = (tasks || []).map((t) => {
+  // only the live queue (server already filters, guard client-side too)
+  const active = (tasks || []).filter((t) => ["queued", "running"].includes(t.status));
+  // skip the DOM rebuild when nothing changed -> no flicker on idle polls
+  const sig = active.map((t) => `${t.id}:${t.status}:${(t.progress || {}).done}:${(t.progress || {}).page_started_at}`).join("|");
+  if ($("tasks").dataset.sig === sig) return;
+  $("tasks").dataset.sig = sig;
+  $("tasks").innerHTML = active.map((t) => {
     const counts = t.progress && t.progress.total ? ` ${t.progress.done}/${t.progress.total}` : "";
     const cancellable = ["queued", "running"].includes(t.status);
     let bar = "";
@@ -376,9 +384,9 @@ function renderTasks(tasks) {
         ${bar}</span>
       <span class="status-${t.status}">${t.status}</span>
       ${cancellable ? `<button class="tiny secondary" onclick="cancelTask('${t.id}')">стоп</button>` : ""}
-      ${t.result.length || t.status === "done" ? `<button class="tiny" onclick="watchTask('${t.id}')">показать</button>` : ""}
+      ${t.result.length ? `<button class="tiny" onclick="watchTask('${t.id}')">показать</button>` : ""}
     </div>`;
-  }).join("") || '<span class="muted">пока пусто</span>';
+  }).join("") || '<span class="muted">нет активных задач</span>';
 }
 
 window.cancelTask = (id) => fetch(`/api/tasks/${id}/cancel`, {method: "POST"}).then(pollState);
@@ -479,16 +487,32 @@ window.watchTask = function watchTask(taskId) {
   tick();
 };
 
+/* Incremental render: append only newly-arrived page cards and update the
+   header in place. Never rebuild existing cards, so the results scroller does
+   not jump and already-typeset math / open tabs stay put during generation. */
 function renderResults(task) {
   $("result-task").textContent = `· ${task.prompt_mode} · ${task.status}`;
   const box = $("results");
+
+  if (state.resultTaskId !== task.id) {
+    // switched to a different task -> start fresh
+    state.resultTaskId = task.id;
+    state.renderedPages = new Set();
+    box.innerHTML = "";
+  }
+
   if (!task.result.length) {
-    box.innerHTML = `<span class="muted">${task.status === "error" ? (task.error || "ошибка") : "задача выполняется…"}</span>`;
+    if (state.renderedPages.size === 0) {
+      box.innerHTML = `<span class="muted">${task.status === "error" ? (task.error || "ошибка") : "задача выполняется…"}</span>`;
+    }
     return;
   }
-  box.innerHTML = "";
+
   for (const page of task.result) {
+    if (state.renderedPages.has(page.page_no)) continue;
+    if (state.renderedPages.size === 0) box.innerHTML = ""; // drop the placeholder
     box.appendChild(resultCard(page));
+    state.renderedPages.add(page.page_no);
   }
 }
 
