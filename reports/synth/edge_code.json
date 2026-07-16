@@ -1,0 +1,609 @@
+{
+  "config": {
+    "ckpt": "/mnt/data2/huggingface/models--rednote-hilab--dots.mocr/snapshots/main",
+    "dpi": 200,
+    "max_pixels": 2200000,
+    "max_new_tokens": 8192,
+    "device": "cuda:0"
+  },
+  "summary": {
+    "by_kind": {
+      "code": 1.0
+    },
+    "n_cases": 14,
+    "families": {
+      "code_c": [
+        {
+          "knob": 6,
+          "case_id": "code_c_l6",
+          "score": 1.0
+        },
+        {
+          "knob": 10,
+          "case_id": "code_c_l10",
+          "score": 1.0
+        },
+        {
+          "knob": 14,
+          "case_id": "code_c_l14",
+          "score": 1.0
+        }
+      ],
+      "code_cpp": [
+        {
+          "knob": 6,
+          "case_id": "code_cpp_l6",
+          "score": 1.0
+        },
+        {
+          "knob": 10,
+          "case_id": "code_cpp_l10",
+          "score": 1.0
+        },
+        {
+          "knob": 11,
+          "case_id": "code_cpp_l11",
+          "score": 1.0
+        }
+      ],
+      "code_python": [
+        {
+          "knob": 6,
+          "case_id": "code_python_l6",
+          "score": 1.0
+        },
+        {
+          "knob": 10,
+          "case_id": "code_python_l10",
+          "score": 1.0
+        }
+      ],
+      "code_go": [
+        {
+          "knob": 6,
+          "case_id": "code_go_l6",
+          "score": 1.0
+        },
+        {
+          "knob": 10,
+          "case_id": "code_go_l10",
+          "score": 1.0
+        },
+        {
+          "knob": 12,
+          "case_id": "code_go_l12",
+          "score": 1.0
+        }
+      ],
+      "code_rust": [
+        {
+          "knob": 6,
+          "case_id": "code_rust_l6",
+          "score": 1.0
+        },
+        {
+          "knob": 10,
+          "case_id": "code_rust_l10",
+          "score": 1.0
+        },
+        {
+          "knob": 15,
+          "case_id": "code_rust_l15",
+          "score": 1.0
+        }
+      ]
+    }
+  },
+  "cases": [
+    {
+      "case_id": "code_c_l6",
+      "kind": "code",
+      "group": "code_c",
+      "params": {
+        "lang": "C",
+        "n_lines": 6
+      },
+      "primary_metric": "line_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "line_recall": 1.0,
+        "lines_matched": 6,
+        "lines_total": 6,
+        "special_token_recall": 1.0,
+        "special_tokens_missing": [],
+        "per_line_similarity": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "categories": {
+        "Text": 2
+      },
+      "filtered": false,
+      "seconds": 7.3,
+      "output_chars": 217,
+      "model_text": "CASEID: code_cl6\n```c\n#include <stdio.h>\n#include <stdlib.h>\ntypedef struct Node { int val; struct Node* next; } Node;\nint sum_list(Node* head) {\n    int acc = 0;\n    for (Node* p = head; p != NULL; p = p->next) {\n```"
+    },
+    {
+      "case_id": "code_c_l10",
+      "kind": "code",
+      "group": "code_c",
+      "params": {
+        "lang": "C",
+        "n_lines": 10
+      },
+      "primary_metric": "line_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "line_recall": 1.0,
+        "lines_matched": 10,
+        "lines_total": 10,
+        "special_token_recall": 1.0,
+        "special_tokens_missing": [],
+        "per_line_similarity": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "categories": {
+        "Text": 2
+      },
+      "filtered": false,
+      "seconds": 7.09,
+      "output_chars": 275,
+      "model_text": "CASEID: code<sub>cl</sub>10\n```c\n#include <stdio.h>\n#include <stdlib.h>\ntypedef struct Node { int val; struct Node* next; } Node;\nint sum_list(Node* head) {\n    int acc = 0;\n    for (Node* p = head; p != NULL; p = p->next) {\n        acc += p->val;\n    }\n    return acc;\n}\n```"
+    },
+    {
+      "case_id": "code_c_l14",
+      "kind": "code",
+      "group": "code_c",
+      "params": {
+        "lang": "C",
+        "n_lines": 14
+      },
+      "primary_metric": "line_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "line_recall": 1.0,
+        "lines_matched": 14,
+        "lines_total": 14,
+        "special_token_recall": 1.0,
+        "special_tokens_missing": [],
+        "per_line_similarity": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "categories": {
+        "Text": 2
+      },
+      "filtered": false,
+      "seconds": 7.51,
+      "output_chars": 335,
+      "model_text": "CASEID: code_cl 14\n```c\n#include <stdio.h>\n#include <stdlib.h>\ntypedef struct Node { int val; struct Node* next; } Node;\nint sum_list(Node* head) {\n    int acc = 0;\n    for (Node* p = head; p != NULL; p = p->next) {\n        acc += p->val;\n    }\n    return acc;\n}\nint main(void) {\n    printf(\"%d\\n\", sum_list(NULL));\n    return 0;\n}\n```"
+    },
+    {
+      "case_id": "code_cpp_l6",
+      "kind": "code",
+      "group": "code_cpp",
+      "params": {
+        "lang": "C++",
+        "n_lines": 6
+      },
+      "primary_metric": "line_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "line_recall": 1.0,
+        "lines_matched": 6,
+        "lines_total": 6,
+        "special_token_recall": 1.0,
+        "special_tokens_missing": [],
+        "per_line_similarity": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "categories": {
+        "Text": 2
+      },
+      "filtered": false,
+      "seconds": 6.58,
+      "output_chars": 235,
+      "model_text": "CASEID:code\\_cpp\\_l6\n```cpp\n#include <vector>\n#include <algorithm>\ntemplate <typename T>\nT max_element_value(const std::vector<T>& xs) {\n    auto it = std::max_element(xs.begin(), xs.end());\n    return it != xs.end() ? *it : T{};\n}\n```"
+    },
+    {
+      "case_id": "code_cpp_l10",
+      "kind": "code",
+      "group": "code_cpp",
+      "params": {
+        "lang": "C++",
+        "n_lines": 10
+      },
+      "primary_metric": "line_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "line_recall": 1.0,
+        "lines_matched": 10,
+        "lines_total": 10,
+        "special_token_recall": 1.0,
+        "special_tokens_missing": [],
+        "per_line_similarity": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "categories": {
+        "Text": 2
+      },
+      "filtered": false,
+      "seconds": 7.43,
+      "output_chars": 328,
+      "model_text": "CASEID: code\\_cpp\\_l10\n```cpp\n#include <vector>\n#include <algorithm>\ntemplate <typename T>\nT max_element_value(const std::vector<T>& xs) {\n    auto it = std::max_element(xs.begin(), xs.end());\n    return it != xs.end() ? *it : T{};\n}\n\nint main() {\n    std::vector<int> v = {3, 1, 4, 1, 5};\n    return max_element_value(v);\n}\n```"
+    },
+    {
+      "case_id": "code_cpp_l11",
+      "kind": "code",
+      "group": "code_cpp",
+      "params": {
+        "lang": "C++",
+        "n_lines": 11
+      },
+      "primary_metric": "line_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "line_recall": 1.0,
+        "lines_matched": 11,
+        "lines_total": 11,
+        "special_token_recall": 1.0,
+        "special_tokens_missing": [],
+        "per_line_similarity": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "categories": {
+        "Text": 2
+      },
+      "filtered": false,
+      "seconds": 7.41,
+      "output_chars": 328,
+      "model_text": "CASEID: code\\_cpp\\_l11\n```cpp\n#include <vector>\n#include <algorithm>\ntemplate <typename T>\nT max_element_value(const std::vector<T>& xs) {\n    auto it = std::max_element(xs.begin(), xs.end());\n    return it != xs.end() ? *it : T{};\n}\n\nint main() {\n    std::vector<int> v = {3, 1, 4, 1, 5};\n    return max_element_value(v);\n}\n```"
+    },
+    {
+      "case_id": "code_python_l6",
+      "kind": "code",
+      "group": "code_python",
+      "params": {
+        "lang": "Python",
+        "n_lines": 6
+      },
+      "primary_metric": "line_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "line_recall": 1.0,
+        "lines_matched": 6,
+        "lines_total": 6,
+        "special_token_recall": 1.0,
+        "special_tokens_missing": [],
+        "per_line_similarity": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "categories": {
+        "Text": 2
+      },
+      "filtered": false,
+      "seconds": 6.18,
+      "output_chars": 168,
+      "model_text": "CASEID: code\\_python\\_6\nimport math\ndef quicksort(arr):\n    if len(arr) <= 1:\n        return arr\n    pivot = arr[len(arr) // 2]\n    left = [x for x in arr if x < pivot]"
+    },
+    {
+      "case_id": "code_python_l10",
+      "kind": "code",
+      "group": "code_python",
+      "params": {
+        "lang": "Python",
+        "n_lines": 10
+      },
+      "primary_metric": "line_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "line_recall": 1.0,
+        "lines_matched": 10,
+        "lines_total": 10,
+        "special_token_recall": 1.0,
+        "special_tokens_missing": [],
+        "per_line_similarity": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "categories": {
+        "Text": 2
+      },
+      "filtered": false,
+      "seconds": 7.5,
+      "output_chars": 339,
+      "model_text": "CASEID: code\\_python\\_l10\nimport math\ndef quicksort(arr):\n    if len(arr) <= 1:\n        return arr\n    pivot = arr[len(arr) // 2]\n    left = [x for x in arr if x < pivot]\n    mid = [x for x in arr if x == pivot]\n    right = [x for x in arr if x > pivot]\n    return quicksort(left) + mid + quicksort(right)\nprint(quicksort([3, 6, 1, 8, 2]))"
+    },
+    {
+      "case_id": "code_go_l6",
+      "kind": "code",
+      "group": "code_go",
+      "params": {
+        "lang": "Go",
+        "n_lines": 6
+      },
+      "primary_metric": "line_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "line_recall": 1.0,
+        "lines_matched": 6,
+        "lines_total": 6,
+        "special_token_recall": 1.0,
+        "special_tokens_missing": [],
+        "per_line_similarity": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "categories": {
+        "Text": 2
+      },
+      "filtered": false,
+      "seconds": 5.98,
+      "output_chars": 136,
+      "model_text": "CASEID: code$_{g}$$o_l$6\npackage main\nimport \"fmt\"\nfunc sum(xs []int) int {\n    total := 0\n    for _, x := range xs {\n        total += x"
+    },
+    {
+      "case_id": "code_go_l10",
+      "kind": "code",
+      "group": "code_go",
+      "params": {
+        "lang": "Go",
+        "n_lines": 10
+      },
+      "primary_metric": "line_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "line_recall": 1.0,
+        "lines_matched": 10,
+        "lines_total": 10,
+        "special_token_recall": 1.0,
+        "special_tokens_missing": [],
+        "per_line_similarity": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "categories": {
+        "Text": 2
+      },
+      "filtered": false,
+      "seconds": 6.32,
+      "output_chars": 176,
+      "model_text": "CASEID: code$_{g}$$o_l$10\npackage main\nimport \"fmt\"\nfunc sum(xs []int) int {\n    total := 0\n    for _, x := range xs {\n        total += x\n    }\n    return total\n}\nfunc main() {"
+    },
+    {
+      "case_id": "code_go_l12",
+      "kind": "code",
+      "group": "code_go",
+      "params": {
+        "lang": "Go",
+        "n_lines": 12
+      },
+      "primary_metric": "line_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "line_recall": 1.0,
+        "lines_matched": 12,
+        "lines_total": 12,
+        "special_token_recall": 1.0,
+        "special_tokens_missing": [],
+        "per_line_similarity": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "categories": {
+        "Text": 2
+      },
+      "filtered": false,
+      "seconds": 6.77,
+      "output_chars": 215,
+      "model_text": "CASEID: code$_{g}$$o_l$12\npackage main\nimport \"fmt\"\nfunc sum(xs []int) int {\n    total := 0\n    for _, x := range xs {\n        total += x\n    }\n    return total\n}\nfunc main() {\n    fmt.Println(sum([]int{1, 2, 3}))\n}"
+    },
+    {
+      "case_id": "code_rust_l6",
+      "kind": "code",
+      "group": "code_rust",
+      "params": {
+        "lang": "Rust",
+        "n_lines": 6
+      },
+      "primary_metric": "line_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "line_recall": 1.0,
+        "lines_matched": 6,
+        "lines_total": 6,
+        "special_token_recall": 1.0,
+        "special_tokens_missing": [],
+        "per_line_similarity": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "categories": {
+        "Text": 2
+      },
+      "filtered": false,
+      "seconds": 6.5,
+      "output_chars": 200,
+      "model_text": "CASEID: code\\_rust\\_l6\nuse std::collections::HashMap;\nfn classify(n: i64) -> &'static str {\n    match n {\n        x if x < 0 => \"negative\",\n        0 => \"zero\",\n        _ => return \"positive\",\n    }\n}"
+    },
+    {
+      "case_id": "code_rust_l10",
+      "kind": "code",
+      "group": "code_rust",
+      "params": {
+        "lang": "Rust",
+        "n_lines": 10
+      },
+      "primary_metric": "line_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "line_recall": 1.0,
+        "lines_matched": 10,
+        "lines_total": 10,
+        "special_token_recall": 1.0,
+        "special_tokens_missing": [],
+        "per_line_similarity": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "categories": {
+        "Text": 2
+      },
+      "filtered": false,
+      "seconds": 6.93,
+      "output_chars": 270,
+      "model_text": "CASEID: code\\_rust\\_l10\nuse std::collections::HashMap;\nfn classify(n: i64) -> &'static str {\n    match n {\n        x if x < 0 => \"negative\",\n        0 => \"zero\",\n        _ => return \"positive\",\n    }\n}\nfn main() {\n    let mut counts: HashMap<&str, u32> = HashMap::new();"
+    },
+    {
+      "case_id": "code_rust_l15",
+      "kind": "code",
+      "group": "code_rust",
+      "params": {
+        "lang": "Rust",
+        "n_lines": 15
+      },
+      "primary_metric": "line_recall",
+      "primary_value": 1.0,
+      "metrics": {
+        "line_recall": 1.0,
+        "lines_matched": 15,
+        "lines_total": 15,
+        "special_token_recall": 1.0,
+        "special_tokens_missing": [],
+        "per_line_similarity": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          0.978,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "categories": {
+        "Text": 2
+      },
+      "filtered": false,
+      "seconds": 8.17,
+      "output_chars": 400,
+      "model_text": "CASEID: code_rust_l15\n```rust\nuse std::collections::HashMap;\nfn classify(n: i64) -> &'static str {\n    match n {\n        x if x < 0 => \"negative\",\n        0 => \"zero\",\n        _ => return \"positive\",\n    }\n}\nfn main() {\n    let mut counts: HashMap<&str, u32> = HashMap::new();\n    for n in &[-2, 0, 5] {\n        *counts entry(classify(*n)).or_insert(0) += 1;\n    }\n    println!(\"{:?}\", counts);\n}\n```"
+    }
+  ]
+}

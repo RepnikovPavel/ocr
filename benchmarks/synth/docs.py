@@ -415,33 +415,36 @@ _CODE_SNIPPETS = {
         "lines": [
             "package main",
             "import \"fmt\"",
-            "func fib(n int) int {",
-            "    a, b := 0, 1",
-            "    for i := 0; i < n; i++ {",
-            "        a, b = b, a+b",
+            "func sum(xs []int) int {",
+            "    total := 0",
+            "    for _, x := range xs {",
+            "        total += x",
             "    }",
-            "    return a",
+            "    return total",
             "}",
             "func main() {",
-            "    fmt.Println(fib(10))",
+            "    fmt.Println(sum([]int{1, 2, 3}))",
             "}",
         ],
     },
     "rust": {
         "group": "code_rust", "lang": "Rust",
-        "special": ["fn", "let", "mut", "->", "match", "return", "&", "::", "Vec"],
+        "special": ["fn", "let", "mut", "->", "match", "return", "&", "::", "HashMap"],
         "lines": [
-            "fn gcd(mut a: u64, mut b: u64) -> u64 {",
-            "    while b != 0 {",
-            "        let t = b;",
-            "        b = a % b;",
-            "        a = t;",
+            "use std::collections::HashMap;",
+            "fn classify(n: i64) -> &'static str {",
+            "    match n {",
+            "        x if x < 0 => \"negative\",",
+            "        0 => \"zero\",",
+            "        _ => return \"positive\",",
             "    }",
-            "    a",
             "}",
             "fn main() {",
-            "    let xs: Vec<u64> = vec![48, 36];",
-            "    println!(\"{}\", gcd(xs[0], xs[1]));",
+            "    let mut counts: HashMap<&str, u32> = HashMap::new();",
+            "    for n in &[-2, 0, 5] {",
+            "        *counts.entry(classify(*n)).or_insert(0) += 1;",
+            "    }",
+            "    println!(\"{:?}\", counts);",
             "}",
         ],
     },
@@ -467,10 +470,13 @@ def code_cases():
         for n_lines in sorted({min(6, total), min(10, total), total}):
             body, code_lines = _lstlisting_body(lang_key, n_lines)
             case_id = f"{spec['group']}_l{n_lines}"
+            # only score tokens that actually appear in the selected code lines
+            joined = "\n".join(code_lines)
+            present = [t for t in spec["special"] if t in joined]
             gt = {
                 "lang": spec["lang"],
                 "lines": code_lines,
-                "special_tokens": spec["special"],
+                "special_tokens": present,
                 "n_lines": n_lines,
             }
             cases.append(SynthCase(case_id, "code", spec["group"], body, gt,
