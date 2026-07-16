@@ -101,7 +101,7 @@ pages/min на 100-страничном PDF через оба GPU.
 |---|---|---|
 | §02 flash vision | TTFT ×1.2–1.5 + снятие OOM/потолка разрешения (и точность) | flash-attn build |
 | §01-A cuda-graphs+compile (§03) | decode ×2–3, дёшево, безопасно | static cache |
-| §01-B движок (vLLM/TRT) | decode ×3–5, и включает §04/05/06 | парсинг vision → эмбеддинги |
+| §01-B движок (vLLM/TRT) | decode ×3–5, и включает §04/05/06; vision гоняет сам | vLLM≥0.11 в cu126-среде (авторский образ v0.17.1 — cu130, у нас не стартует) |
 | §04 fp8/int8 веса | decode ×1.5–2 (удваивает roofline) | §01, `synth`-порог качества |
 | §05 paged/quant KV | батч + длина (enabler) | §01-B |
 | §06 continuous batching | throughput ×3–8 на многостраничных | §01-B + §05 |

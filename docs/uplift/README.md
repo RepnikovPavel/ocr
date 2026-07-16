@@ -4,25 +4,46 @@
 ([../architecture.md](../architecture.md)). Для читателя, который силён в CUDA/PyTorch,
 но не в LLM/VLM — начните с primer.
 
+## Ограничение: inference-only (модель не менять)
+
+Требование задачи: **модель должна выдавать ровно те же ответы, что у авторов**.
+Отсюда жёсткая классификация:
+
+- **В рамках** (веса bf16 нетронуты, та же математика, меняется только расписание
+  ядер): §01 (cuda-graphs/движок), §02 (flash-attn — это и есть авторский референс),
+  §03 (фьюзы/compile), §05-paged (побитово та же адресация), §06 (батчинг).
+- **Вне рамок** (меняет численность модели → другие логиты → другие ответы):
+  §04 квантование весов fp8/int8 и §05-quant (квантование KV). Оставлены в доках как
+  справка на случай, если ограничение когда-то ослабят.
+
+**Что значит «ровно те же ответы» технически.** Авторский референс — HF с
+`attn_implementation="flash_attention_2"` (bf16) и официальный vLLM (≥0.11). Эти два
+авторских пути **между собой** не бит-идентичны (разные ядра → FP-переупорядочивание на
+уровне ULP bf16). Поэтому критерий приёмки — как у самих авторов между их путями:
+**точное совпадение последовательности token-id при greedy (temperature=0)** с
+авторской flash-конфигурацией на контрольном наборе страниц; любое расхождение id
+расследуется как дефект, а не списывается на «шум».
+
 - **[00 — Primer: инференс LLM/VLM для CUDA-инженера](00-primer-llm-inference-for-cuda-engineers.md)**
   — авторегрессия, prefill vs decode, attention в decode, **KV-кэш**, GQA, почему decode
   launch/bandwidth-bound. Мост от «мешанины LLM» к твоему мышлению (shapes/bytes/launches/roofline).
 
-| # | Proposal | Фаза | Тип выигрыша |
-|---|---|---|---|
-| [01](01-decode-engine-cuda-graphs.md) | Движок decode: CUDA Graphs → vLLM/TRT-LLM | decode | латентность ×2–5, throughput ×5–10 (с батчем) |
-| [02](02-vision-flash-attention.md) | Vision: flash-attention вместо sdpa | prefill | TTFT ×1.2–1.5 + снятие потолка разрешения |
-| [03](03-kernel-fusion.md) | Фьюзы ядер / `torch.compile` | prefill | ×1.1–1.3 |
-| [04](04-tensor-core-gemm-quant.md) | Tensor-core лейауты + fp8/int8 весов | decode | ×1.5–2 (удваивает roofline) |
-| [05](05-kv-cache-paged-quant.md) | KV-кэш: paged + квантованный | decode | enabler батча и длины |
-| [06](06-batching-parallelism.md) | Батчинг + 2×4090 | decode | throughput ×3–8 на многостраничных |
+| # | Proposal | Фаза | Тип выигрыша | Inference-only? |
+|---|---|---|---|---|
+| [01](01-decode-engine-cuda-graphs.md) | Движок decode: CUDA Graphs → vLLM/TRT-LLM | decode | латентность ×2–5, throughput ×5–10 (с батчем) | ✅ |
+| [02](02-vision-flash-attention.md) | Vision: flash-attention вместо sdpa | prefill | TTFT ×1.2–1.5 + снятие потолка разрешения | ✅ (авторский референс) |
+| [03](03-kernel-fusion.md) | Фьюзы ядер / `torch.compile` | prefill | ×1.1–1.3 | ✅ |
+| [04](04-tensor-core-gemm-quant.md) | Tensor-core лейауты + fp8/int8 весов | decode | ×1.5–2 | ⚠️ TC-часть ✅, квантование ❌ |
+| [05](05-kv-cache-paged-quant.md) | KV-кэш: paged + квантованный | decode | enabler батча и длины | ⚠️ paged ✅, квантование ❌ |
+| [06](06-batching-parallelism.md) | Батчинг + 2×4090 | decode | throughput ×3–8 на многостраничных | ✅ |
 
 **Как складываются** (подробно — в конце [06](06-batching-parallelism.md)):
-латентность одной страницы лечат §02 + §01 (+§04); throughput пакета страниц — §01-B +
-§05 + §06 поверх готового data-parallel 2×4090. Движок из §01-B (vLLM/TRT-LLM) включает
-§04/05/06 как встроенные фичи. §02/03 — vision-специфика, которую LLM-движок сам не
-ускоряет. Точность не должна пострадать нигде — общий контур регрессии в
-[../architecture.md](../architecture.md) §8.
+латентность одной страницы лечат §02 + §01; throughput пакета страниц — §01-B + §05-paged
++ §06 поверх готового data-parallel 2×4090. Движок из §01-B (vLLM/TRT-LLM) включает
+§05/§06 как встроенные фичи и **гоняет vision сам** (официальная интеграция dots.mocr в
+vLLM ≥0.11); §02/03 актуальны для HF/PyTorch-пути (cli, демки, эталон регрессии).
+Ответы модели не должны измениться нигде — общий контур регрессии в
+[../architecture.md](../architecture.md) §8, эталон — авторская flash-конфигурация.
 
 Рекомендованный порядок: **§02 (flash vision) + §01-A (cuda-graphs)** → замер → **§01-B
 (движок)** → **§04 (fp8)** → **§06 (батч) поверх §05**.
