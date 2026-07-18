@@ -16,6 +16,10 @@ Environment:
   DEMO_ATTN_IMPLEMENTATION
                   attention backend: flex_attention (default) | sdpa | eager |
                   flash_attention_2
+  DEMO_ENGINE     transformers (default, model runs in this process) | vllm
+                  (drives a vLLM server that owns the GPU)
+  DEMO_VLLM_URL   vLLM endpoint (default http://127.0.0.1:8000/v1)
+  DEMO_VLLM_MODEL served model name (default rednote-hilab/dots.mocr)
 """
 
 from __future__ import annotations
@@ -97,6 +101,9 @@ WORKER = DemoWorker(
     idle_unload_seconds=int(os.environ.get("DEMO_IDLE_UNLOAD_S", "180")),
     # empty => DotsMOCRParser's own default (flex_attention)
     attn_implementation=os.environ.get("DEMO_ATTN_IMPLEMENTATION") or None,
+    engine=os.environ.get("DEMO_ENGINE", "transformers"),
+    vllm_url=os.environ.get("DEMO_VLLM_URL"),
+    vllm_model=os.environ.get("DEMO_VLLM_MODEL"),
 )
 
 app = FastAPI(title=VARIANTS[VARIANT]["title"])
