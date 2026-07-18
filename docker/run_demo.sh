@@ -15,6 +15,11 @@ demo_engine="${DEMO_ENGINE:-transformers}"
 # authentication and accepts file uploads. Set 0.0.0.0 to expose it to everyone
 # who can reach this host, and only do that on a trusted network.
 bind_addr="${DOTS_MOCR_BIND:-127.0.0.1}"
+# The image carries a copy of the code from build time. Mounting the checkout runs
+# what is actually in this working tree, which is almost always what someone
+# deploying from a clone means — and avoids rebuilding a 60 GB image to change a
+# few lines. Set 0 to run the code baked into the image instead.
+mount_repo="${DOTS_MOCR_MOUNT_REPO:-1}"
 
 [[ -d "${ckpt_dir}" ]] || { echo "checkpoint directory does not exist: ${ckpt_dir}" >&2; exit 2; }
 [[ -n "${state_dir}" ]] || { echo "state directory is required (for outputs + sessions)" >&2; exit 2; }
@@ -22,6 +27,8 @@ bind_addr="${DOTS_MOCR_BIND:-127.0.0.1}"
 mkdir -p "${state_dir}"
 ckpt_dir="$(cd "${ckpt_dir}" && pwd -P)"
 state_dir="$(cd "${state_dir}" && pwd -P)"
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 docker rm -f "${container_name}" >/dev/null 2>&1 || true
 
@@ -54,11 +61,15 @@ docker run -d \
     --env PORT=7860 \
     --env DOTS_MOCR_WEB_PORT=7860 \
     --env PYTORCH_ALLOC_CONF=expandable_segments:True \
+    ${mount_repo:+$([[ "$mount_repo" == "1" ]] && echo "--mount type=bind,src=${repo_root},dst=/opt/dots-mocr,readonly")} \
     --mount "type=bind,src=${ckpt_dir},dst=/models,readonly" \
     --mount "type=bind,src=${state_dir},dst=/state" \
     "${image_name}" \
     python3 -m demo.server
 
+if [[ "${mount_repo}" == "1" ]]; then
+    echo "running the code from ${repo_root} (DOTS_MOCR_MOUNT_REPO=0 for the image's copy)"
+fi
 echo "demo started (engine=${demo_engine}): docker logs -f ${container_name}"
 if [[ "${bind_addr}" == "127.0.0.1" ]]; then
     echo "open http://127.0.0.1:${port} or ssh -N -L ${port}:127.0.0.1:${port} ..."
