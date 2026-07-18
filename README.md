@@ -41,6 +41,75 @@ docker run --rm --gpus all --ipc=host -v /mnt:/mnt -v "$PWD:/workspace" dots-moc
 
 `src/dots_mocr/transformers_patch` is the local port of commit `d2eb02900bcee0cf02b653bbd31c3117b132e060`. Checkpoints and generated results are not committed.
 
+## Развернуть демку: четыре готовых рецепта
+
+Копируемые команды под типовые задачи. Общее для всех: `CKPT` — путь к снапшоту
+чекпойнта, порт демки по умолчанию 8601.
+
+```bash
+CKPT=/mnt/nvme/huggingface/models--rednote-hilab--dots.mocr/snapshots/main
+```
+
+### 1. Локально, движок transformers + flex_attention
+
+Модель грузится в сам процесс, сервер не нужен. Медленнее vLLM примерно вдвое,
+зато одна зависимость.
+
+```bash
+scripts/setup_local.sh                      # один раз: venv + пины
+CKPTDIR="$CKPT" scripts/run_local.sh        # http://127.0.0.1:8601
+```
+
+Бэкенд внимания меняется через `DEMO_ATTN_IMPLEMENTATION`
+(`flex_attention` по умолчанию, ещё `sdpa`, `eager`, `flash_attention_2`).
+
+### 2. Локально, движок vLLM (по умолчанию, быстрее)
+
+Поднимает vLLM на :8000 и демку рядом одной командой.
+
+```bash
+docker build -f docker/Dockerfile.vllm -t dots-mocr:vllm docker/   # один раз
+scripts/setup_local.sh                                            # один раз
+CKPTDIR="$CKPT" scripts/run_local_vllm.sh                         # http://127.0.0.1:8601
+```
+
+Останов — `Ctrl+C`, контейнер vLLM снимается сам.
+
+### 3. На сервере, UI открывается на своей машине (через SSH-туннель)
+
+Порт слушает только `127.0.0.1`, снаружи не виден — безопасный вариант.
+
+```bash
+# на сервере
+ssh <server> 'cd /path/to/ocr && ./docker/run_demo.sh "$CKPT" /path/to/state 8601'
+
+# у себя
+ssh -N -L 8601:127.0.0.1:8601 <server>
+# браузер: http://localhost:8601
+```
+
+### 4. На сервере, доступно всем в сети
+
+То же самое, но порт публикуется на всех интерфейсах.
+
+```bash
+ssh <server> 'cd /path/to/ocr && DOTS_MOCR_BIND=0.0.0.0 ./docker/run_demo.sh "$CKPT" /path/to/state 8601'
+# браузер откуда угодно в сети: http://<ip-сервера>:8601
+```
+
+> **У демки нет аутентификации**, она принимает загрузку файлов и запускает
+> инференс. Публиковать на `0.0.0.0` можно только в доверенной сети. По умолчанию
+> привязка к `127.0.0.1` именно поэтому.
+
+Полезное для всех серверных вариантов:
+
+```bash
+docker logs -f dots_mocr_demo          # логи
+docker rm -f dots_mocr_demo            # остановить
+DOTS_MOCR_GPUS='"device=0"' ...        # прибить к одной карте
+DEMO_ENGINE=vllm DEMO_VLLM_URL=http://127.0.0.1:8000/v1 ...   # если vLLM уже поднят
+```
+
 ## Локальный запуск (без Docker)
 
 Всё, что раньше жило только в контейнере на сервере, запускается на обычной
