@@ -7,6 +7,14 @@ port="${3:-8002}"
 image_name="${DOTS_MOCR_IMAGE:-dots-mocr:trtllm-1.3.0rc20}"
 container_name="${DOTS_MOCR_CONTAINER_NAME:-dots_mocr_demo}"
 gpu_request="${DOTS_MOCR_GPUS:-all}"
+# This launcher starts the demo container only, with no vLLM server beside it, so
+# it pins the in-process engine rather than inheriting the demo's vllm default.
+demo_engine="${DEMO_ENGINE:-transformers}"
+# Which interface the port is published on. 127.0.0.1 keeps the demo reachable
+# only through an SSH tunnel, which is the safe default: the demo has no
+# authentication and accepts file uploads. Set 0.0.0.0 to expose it to everyone
+# who can reach this host, and only do that on a trusted network.
+bind_addr="${DOTS_MOCR_BIND:-127.0.0.1}"
 
 [[ -d "${ckpt_dir}" ]] || { echo "checkpoint directory does not exist: ${ckpt_dir}" >&2; exit 2; }
 [[ -n "${state_dir}" ]] || { echo "state directory is required (for outputs + sessions)" >&2; exit 2; }
@@ -30,7 +38,7 @@ docker run -d \
     --tmpfs /tmp:rw,nosuid,nodev,exec,size=8g,mode=1777 \
     --gpus "${gpu_request}" \
     --network bridge \
-    --publish "127.0.0.1:${port}:7860/tcp" \
+    --publish "${bind_addr}:${port}:7860/tcp" \
     --env HOME=/tmp \
     --env TRITON_CACHE_DIR=/tmp/triton-cache \
     --env HF_HOME=/models \
@@ -40,6 +48,9 @@ docker run -d \
     --env HF_DATASETS_OFFLINE=1 \
     --env CKPTDIR=/models \
     --env DEMO_STATE_DIR=/state \
+    --env DEMO_ENGINE="${demo_engine}" \
+    ${DEMO_VLLM_URL:+--env DEMO_VLLM_URL="${DEMO_VLLM_URL}"} \
+    ${DEMO_ATTN_IMPLEMENTATION:+--env DEMO_ATTN_IMPLEMENTATION="${DEMO_ATTN_IMPLEMENTATION}"} \
     --env PORT=7860 \
     --env DOTS_MOCR_WEB_PORT=7860 \
     --env PYTORCH_ALLOC_CONF=expandable_segments:True \
@@ -48,5 +59,10 @@ docker run -d \
     "${image_name}" \
     python3 -m demo.server
 
-echo "demo started: docker logs -f ${container_name}"
-echo "open http://127.0.0.1:${port} or ssh -N -L ${port}:127.0.0.1:${port} ..."
+echo "demo started (engine=${demo_engine}): docker logs -f ${container_name}"
+if [[ "${bind_addr}" == "127.0.0.1" ]]; then
+    echo "open http://127.0.0.1:${port} or ssh -N -L ${port}:127.0.0.1:${port} ..."
+else
+    echo "listening on ${bind_addr}:${port} — reachable by anyone who can reach this host."
+    echo "the demo has no authentication; keep this on a trusted network."
+fi
