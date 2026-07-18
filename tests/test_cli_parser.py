@@ -19,8 +19,13 @@ def make_parser(monkeypatch, tmp_path, fake_response, **kwargs):
     )
     calls = []
 
-    def fake_inference(image, prompt, temperature=None):
+    def fake_inference(image, prompt, temperature=None, stats=None):
         calls.append({"prompt": prompt, "temperature": temperature, "size": image.size})
+        if stats is not None:  # mimic a real 3-token generation for the telemetry
+            stats.start(prompt_tokens=7)
+            for _ in range(3):
+                stats.record_token()
+            stats.finish(generated_tokens=3)
         return fake_response
 
     parser._inference = fake_inference

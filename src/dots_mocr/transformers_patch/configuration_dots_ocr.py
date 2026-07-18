@@ -19,7 +19,11 @@ class DotsVisionConfig(PretrainedConfig):
         temporal_patch_size: int = 1,
         rms_norm_eps: float = 1e-5,
         use_bias: bool = False,
-        attn_implementation="flash_attention_2",  # "eager","sdpa","flash_attention_2"
+        # flex_attention rather than the upstream flash_attention_2 default: any path
+        # that builds the model without going through DotsMOCRParser._load_model
+        # (which overwrites this) would otherwise raise ImportError on a box without
+        # flash-attn. A value present in a checkpoint's config.json still wins.
+        attn_implementation="flex_attention",  # "eager","sdpa","flash_attention_2","flex_attention"
         initializer_range=0.02,
         init_merger_std=0.02,
         is_causal=False,  # ve causal forward
