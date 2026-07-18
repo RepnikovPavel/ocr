@@ -86,14 +86,23 @@ def pages_key(pages):
 # ---------------------------------------------------------------- documents
 
 def remember_document(sha256, filename, kind, num_pages, size_bytes):
-    """Record the upload; returns True when this content is new to the store."""
+    """Record the upload; returns True when this content is new to the store.
+
+    On resubmission we also refresh `filename`, `kind`, `num_pages`, and
+    `size_bytes` — a corrected page count (or a renamed file) from a later
+    upload should propagate, otherwise stale metadata is served forever from
+    the original row. Content-addressing by sha256 still guarantees
+    idempotency: same bytes → same row.
+    """
     now = time.time()
     with _connect() as conn:
         row = conn.execute("SELECT sha256 FROM documents WHERE sha256=?", (sha256,)).fetchone()
         if row:
             conn.execute(
-                "UPDATE documents SET last_seen_at=?, times_submitted=times_submitted+1 "
-                "WHERE sha256=?", (now, sha256))
+                "UPDATE documents SET last_seen_at=?, times_submitted=times_submitted+1, "
+                "filename=?, kind=?, num_pages=?, size_bytes=? "
+                "WHERE sha256=?",
+                (now, filename, kind, num_pages, size_bytes, sha256))
             return False
         conn.execute(
             "INSERT INTO documents (sha256, filename, kind, num_pages, size_bytes, "
@@ -159,12 +168,38 @@ def search(query, limit=20):
     quoted phrase: FTS5 reads `-` as NOT, which makes ordinary terms like
     "open-source" or "GPT-4V" fail, and an agent searching for a hyphenated word
     should get results rather than a 400.
+
+    As a last resort, if FTS returns zero matches (e.g. the unicode61 tokenizer
+    split a term in a way the query didn't anticipate), we fall back to a
+    case-insensitive LIKE over both body and filename. This guarantees a
+    substring match a user would reasonably expect.
     """
     try:
-        return _run_search(query, limit)
+        rows = _run_search(query, limit)
     except ValueError:
         escaped = '"' + query.replace('"', '""') + '"'
-        return _run_search(escaped, limit)
+        rows = _run_search(escaped, limit)
+    if rows:
+        return rows
+    return _run_search_like(query, limit)
+
+
+def _run_search_like(query, limit):
+    """Substring fallback used when FTS5 returns 0 rows. Slower but exact."""
+    pattern = f"%{query}%"
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT s.sha256, s.prompt_mode, s.filename, "
+            "       substr(s.body, 1, 240) AS snippet, "
+            "       d.num_pages, d.times_submitted, r.created_at "
+            "FROM document_search s "
+            "JOIN documents d ON d.sha256 = s.sha256 "
+            "LEFT JOIN document_results r ON r.sha256 = s.sha256 "
+            "     AND r.prompt_mode = s.prompt_mode "
+            "WHERE s.body LIKE ? COLLATE NOCASE OR s.filename LIKE ? COLLATE NOCASE "
+            "ORDER BY r.created_at DESC LIMIT ?",
+            (pattern, pattern, limit)).fetchall()
+        return [dict(row) for row in rows]
 
 
 def _run_search(query, limit):
