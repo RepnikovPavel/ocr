@@ -260,15 +260,22 @@ BBOX_TOLERANCE_PX = 4
 def semantic_match(reference_text, candidate_text, bbox_tolerance=BBOX_TOLERANCE_PX):
     """Do two layout outputs say the same thing?
 
-    Byte equality is the wrong bar in bf16. Attention backends sum in different
-    orders, and 42 residual vision layers amplify that: measured on this checkpoint,
-    the *already shipped* eager and sdpa backends differ from each other by 38%
-    relative on the tower output, and flex by 46%. In fp32 all three agree to ~1e-4,
-    which is what proves the mask semantics are identical. Downstream, that shows up
-    as an occasional +-1 px bbox coordinate — never as different text.
+    Byte equality is the wrong bar in bf16, and not only for flex: measured on this
+    checkpoint, `sdpa` itself produces two different answers for the same page under
+    field-for-field identical configs, differing only in the torch build. Attention
+    backends sum in different orders, 42 residual vision layers amplify that, and
+    greedy decoding is an argmax — so any step whose top-1/top-2 margin is thinner
+    than the perturbation is a coin flip.
 
-    So the regression criterion is: same blocks, same categories, same text, and
-    bboxes that agree within a few pixels.
+    Mostly that surfaces as a +-1 px bbox coordinate, but it can also flip a token
+    of text: on one page every backend disagrees about whether a LaTeX fragment
+    carries absolute-value bars, and sdpa lands on both sides across builds. So a
+    single differing token is not evidence that a backend is wrong.
+
+    The regression criterion is therefore: same blocks, same categories, same text,
+    and bboxes within a few pixels — with the understanding that an occasional text
+    difference is a property of the model in bf16, not of the backend under test.
+    Mask identity is what gets asserted exactly; see tests/test_vision_flex_attention.py.
     """
     if reference_text == candidate_text:
         return True, "identical"
