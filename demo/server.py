@@ -20,6 +20,8 @@ Environment:
                   transformers (runs the model in this process)
   DEMO_VLLM_URL   vLLM endpoint (default http://127.0.0.1:8000/v1)
   DEMO_VLLM_MODEL served model name (default rednote-hilab/dots.mocr)
+  DEMO_HOST       interface to bind (default 0.0.0.0; the deploy script sets
+                  127.0.0.1 under host networking, where nothing else restricts it)
 """
 
 from __future__ import annotations
@@ -51,6 +53,11 @@ VARIANT = os.environ.get("DEMO_VARIANT", "mocr")
 CKPTDIR = os.environ.get("CKPTDIR", "/models")
 STATE_DIR = Path(os.environ.get("DEMO_STATE_DIR", "/state"))
 PORT = int(os.environ.get("PORT", "7860"))
+# Which interface uvicorn binds. 0.0.0.0 is right when docker publishes the port
+# and decides the exposure (docker/run_demo.sh does that). Under host networking
+# there is no publish step, so the bind address IS the exposure and the deploy
+# script sets this explicitly.
+HOST = os.environ.get("DEMO_HOST", "0.0.0.0")
 INFER_DPI = int(os.environ.get("DEMO_DPI", "150"))
 MAX_PIXELS = int(os.environ.get("DEMO_MAX_PIXELS", "2200000"))
 # the sibling demo (the other model) — rendered as a link in the header
@@ -464,5 +471,5 @@ def index():
 
 
 if __name__ == "__main__":
-    print(f"Starting {VARIANTS[VARIANT]['title']} on 0.0.0.0:{PORT} (ckpt={CKPTDIR})")
-    uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="info")
+    print(f"Starting {VARIANTS[VARIANT]['title']} on {HOST}:{PORT} (ckpt={CKPTDIR})")
+    uvicorn.run(app, host=HOST, port=PORT, log_level="info")
