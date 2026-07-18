@@ -1,0 +1,24 @@
+# vLLM reference-inference image for dots.mocr.
+#
+# Exists to answer one question honestly: how far is this repository's
+# transformers-based inference from a production engine on the same card? vLLM is
+# the baseline that decides whether further hand optimization is worth doing.
+#
+# dots_ocr has been natively supported by vLLM since 0.11.0, so no plugin or
+# out-of-tree registration is needed; the upstream project recommends the official
+# image directly.
+#
+#   docker build -f docker/Dockerfile.vllm -t dots-mocr:vllm docker/
+#   docker run --rm --gpus all --ipc=host -p 127.0.0.1:8000:8000 \
+#       -v /mnt:/mnt:ro dots-mocr:vllm \
+#       --model $CKPT --served-model-name rednote-hilab/dots.mocr \
+#       --gpu-memory-utilization 0.92 --max-model-len 8192 \
+#       --chat-template-content-format string --trust-remote-code
+#
+# The pin is deliberate: engine version is part of any number this image produces.
+ARG VLLM_VERSION=v0.17.1
+FROM vllm/vllm-openai:${VLLM_VERSION}
+
+# The entrypoint of the base image is already `vllm serve`; everything else is
+# passed at run time so one image serves every benchmark configuration.
+LABEL org.opencontainers.image.description="vLLM baseline for dots.mocr benchmarking"
