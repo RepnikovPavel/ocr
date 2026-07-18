@@ -64,13 +64,27 @@ echo "  state      : $STATE"
 echo "  demo       : ${BIND}:${DEMO_PORT}   vLLM: 127.0.0.1:${VLLM_PORT}"
 docker compose -f "$COMPOSE" up -d
 
+# A port that is busy with something else answers, so check that what replies is
+# actually our vLLM serving our model — this exact case cost a debugging round
+# when another service on the host answered 404 on the same port.
 echo -n "waiting for vLLM"
+vllm_ready=0
 for _ in $(seq 1 90); do
-    if curl -sf --max-time 3 "http://127.0.0.1:${VLLM_PORT}/health" >/dev/null 2>&1; then
-        echo " up"; break
+    if curl -sf --max-time 3 "http://127.0.0.1:${VLLM_PORT}/v1/models" 2>/dev/null \
+        | grep -q "${VLLM_MODEL_NAME:-rednote-hilab/dots.mocr}"; then
+        vllm_ready=1; echo " up"; break
     fi
     echo -n "."; sleep 5
 done
+if [[ "$vllm_ready" != "1" ]]; then
+    echo " FAILED"
+    echo "vLLM did not come up on 127.0.0.1:${VLLM_PORT}, or something else is on that port:" >&2
+    curl -sS --max-time 3 "http://127.0.0.1:${VLLM_PORT}/v1/models" 2>&1 | head -c 200 >&2 || true
+    echo >&2
+    echo "  docker compose -f $COMPOSE logs vllm    # what the engine said" >&2
+    echo "  VLLM_PORT=8010 scripts/deploy_server.sh # try a free port" >&2
+    exit 1
+fi
 echo -n "waiting for the demo"
 for _ in $(seq 1 30); do
     if curl -sf --max-time 3 "http://127.0.0.1:${DEMO_PORT}/healthz" >/dev/null 2>&1; then

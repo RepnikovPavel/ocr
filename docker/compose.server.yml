@@ -36,6 +36,12 @@ services:
       TRANSFORMERS_OFFLINE: "1"
       HF_HOME: /tmp/hf
       VLLM_SERVER_DEV_MODE: "1"        # registers /sleep and /wake_up
+    # Published explicitly: the demo runs on host networking, so without this it
+    # cannot reach the container at all — and on a busy host 127.0.0.1:8000 may
+    # already answer for something else, which reads as a confusing 404 rather
+    # than a connection refused.
+    ports:
+      - "127.0.0.1:${VLLM_PORT:-8000}:8000"
     volumes:
       - ${VLLM_CKPT_SHADOW:?set by deploy_server.sh}:/ckpt:ro
       - /mnt:/mnt:ro
