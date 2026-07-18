@@ -44,7 +44,7 @@ if str(ROOT) not in sys.path:
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-from demo import db
+from demo import agent_api, db, docstore
 from demo.worker import PAGE_SECONDS_ESTIMATE, DemoWorker, default_temperature
 
 VARIANT = os.environ.get("DEMO_VARIANT", "mocr")
@@ -88,6 +88,8 @@ if VARIANT not in VARIANTS:
 JOBS_DIR = STATE_DIR / "jobs"
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
 db.init_db(STATE_DIR / "demo.db")
+# the document store shares the file: one database to deploy and back up
+docstore.init(STATE_DIR / "demo.db")
 
 WORKER = DemoWorker(
     ckpt=CKPTDIR,
@@ -111,6 +113,10 @@ WORKER = DemoWorker(
 )
 
 app = FastAPI(title=VARIANTS[VARIANT]["title"])
+
+agent_api.configure(JOBS_DIR, WORKER, VARIANTS[VARIANT]["prompt_modes"],
+                    VARIANTS[VARIANT]["default_mode"])
+app.include_router(agent_api.router)
 
 
 @app.on_event("startup")
