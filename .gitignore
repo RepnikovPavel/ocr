@@ -9,3 +9,10 @@ output/
 results/
 artifacts/
 *.safetensors
+local_state/
+.venv-local/
+
+# benchmark / profiler output — regenerate with benchmarks/*.py, do not commit.
+# The curated summary lives in reports/perf-findings.md.
+reports/flexattn/
+reports/profile/

@@ -65,6 +65,20 @@ def test_model_on_cuda_bf16(parser):
     assert total > 2_000_000_000, f"unexpected parameter count {total}"
 
 
+def test_runs_on_the_default_attention_backend(parser):
+    """Everything below asserts the model gives correct answers — this asserts it
+    is the backend we think we are testing. Without it the whole file would still
+    pass if the vision tower silently ran something else."""
+    from dots_mocr.transformers_patch.modeling_dots_vision import VisionFlexAttention
+
+    assert parser.attn_implementation == "flex_attention"
+    assert parser.llm_attn_implementation == "sdpa"
+    blocks = parser.model.vision_tower.blocks
+    assert all(isinstance(block.attn, VisionFlexAttention) for block in blocks), (
+        f"expected VisionFlexAttention in all {len(blocks)} vision layers, got "
+        f"{ {type(b.attn).__name__ for b in blocks} }")
+
+
 def test_single_page_ocr_contains_marker(parser, test_pdf, tmp_path):
     results = parser.parse_file(
         test_pdf, output_dir=str(tmp_path), prompt_mode="prompt_ocr", pages=[0],

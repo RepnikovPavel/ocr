@@ -13,6 +13,9 @@ Environment:
   DEMO_DEVICE     cuda:0 / cuda:1 / auto (default: GPU with most free memory)
   DEMO_DPI        PDF render dpi for inference (default 200, authors' choice)
   DEMO_AUTOSTART  load model at startup (default 1)
+  DEMO_ATTN_IMPLEMENTATION
+                  attention backend: flex_attention (default) | sdpa | eager |
+                  flash_attention_2
 """
 
 from __future__ import annotations
@@ -92,6 +95,8 @@ WORKER = DemoWorker(
     autostart=os.environ.get("DEMO_AUTOSTART", "0") == "1",
     keep_loaded=os.environ.get("DEMO_KEEP_LOADED", "0") == "1",
     idle_unload_seconds=int(os.environ.get("DEMO_IDLE_UNLOAD_S", "180")),
+    # empty => DotsMOCRParser's own default (flex_attention)
+    attn_implementation=os.environ.get("DEMO_ATTN_IMPLEMENTATION") or None,
 )
 
 app = FastAPI(title=VARIANTS[VARIANT]["title"])

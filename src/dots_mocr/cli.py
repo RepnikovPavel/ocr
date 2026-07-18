@@ -15,6 +15,7 @@ from qwen_vl_utils import process_vision_info
 from dots_mocr.transformers_patch import register_transformers
 
 from dots_mocr.utils.consts import image_extensions, MIN_PIXELS, MAX_PIXELS
+from dots_mocr.utils.generation_stats import GenerationStats
 from dots_mocr.utils.image_utils import get_image_by_fitz_doc, fetch_image, smart_resize
 from dots_mocr.utils.doc_utils import fitz_doc_to_image, load_pdf_pages
 from dots_mocr.utils.prompts import dict_promptmode_to_prompt
@@ -38,7 +39,8 @@ class DotsMOCRParser:
             output_dir="./output", 
             min_pixels=None,
             max_pixels=None,
-            attn_implementation="sdpa",
+            attn_implementation="flex_attention",
+            llm_attn_implementation="sdpa",
             device="auto",
             dtype="auto",
         ):
@@ -50,13 +52,26 @@ class DotsMOCRParser:
         self.output_dir = output_dir
         self.min_pixels = min_pixels
         self.max_pixels = max_pixels
+        # Two independent knobs, because the two towers want opposite things:
+        # the vision tower is one big quadratic prefill (flash/flex win there),
+        # the decoder is single-token autoregression where attention is ~0.5% of
+        # the memory traffic and any non-sdpa backend is pure overhead.
+        # Measured on a 4070 Ti, decode: sdpa 60.7 t/s, flash_attention_2 47.3,
+        # flex_attention 46.2. Coupling these two used to make an A/B of the
+        # vision backend silently move the decoder as well.
         self.attn_implementation = attn_implementation
+        self.llm_attn_implementation = llm_attn_implementation or "sdpa"
         self.device = self._resolve_device(device)
         self.dtype = self._resolve_dtype(dtype)
         if self.attn_implementation == "flash_attention_2" and self.device == "cpu":
             raise ValueError("flash_attention_2 requires CUDA")
         if self.attn_implementation == "flash_attention_2" and self.dtype not in (torch.float16, torch.bfloat16):
             raise ValueError("flash_attention_2 requires float16 or bfloat16")
+        if self.attn_implementation == "flex_attention" and self.device == "cpu":
+            # Not an error: flex is numerically correct on CPU, but it runs eagerly
+            # there (compiling needs a toolchain and buys nothing), which is slower
+            # than sdpa at page sizes. Quietly pick the faster equivalent backend.
+            self.attn_implementation = "sdpa"
 
         assert self.min_pixels is None or self.min_pixels >= MIN_PIXELS
         assert self.max_pixels is None or self.max_pixels <= MAX_PIXELS
@@ -67,6 +82,10 @@ class DotsMOCRParser:
         # When set, generation stops at the next decoding step (used by the
         # demo to cancel a running task without unloading the model).
         self.abort_event = None
+        # Optional callback(GenerationStats) fired right before each generate();
+        # the object is then mutated in place, so the demo publishes live
+        # tokens/s by simply holding on to it.
+        self.generation_listener = None
 
         self._load_model(ckpt)
         print(f"Model loaded from {ckpt}, device={self.device}, dtype={self.dtype}, num_thread={self.num_thread}")
@@ -110,7 +129,7 @@ class DotsMOCRParser:
         self.model = AutoModelForCausalLM.from_pretrained(
             ckpt,
             config=config,
-            attn_implementation=self.attn_implementation,
+            attn_implementation=self.llm_attn_implementation,
             torch_dtype=self.dtype,
             device_map=device_map,
             low_cpu_mem_usage=True,
@@ -119,13 +138,31 @@ class DotsMOCRParser:
         )
         self.model.eval()
 
+        if self.attn_implementation == "flex_attention":
+            # Pay the one-time inductor compile here rather than inside the first
+            # page, where a multi-second stall reads as a hang.
+            from dots_mocr.transformers_patch.modeling_dots_vision import warmup_vision_flex
+
+            vision_config = config.vision_config
+            warmup_vision_flex(
+                self.model.device,
+                dtype=self.dtype,
+                num_heads=vision_config.num_attention_heads,
+                head_dim=vision_config.embed_dim // vision_config.num_attention_heads,
+            )
+
         self.processor = AutoProcessor.from_pretrained(
             ckpt,
             local_files_only=True,
             trust_remote_code=False,
         )
 
-    def _inference(self, image, prompt, temperature=None):
+    def _inference(self, image, prompt, temperature=None, stats=None):
+        """Run one generate() call.
+
+        `stats` is an optional GenerationStats the caller owns; it is filled in
+        place while decoding runs, so a UI thread can poll it for live tokens/s.
+        """
         temperature = self.temperature if temperature is None else temperature
         messages = [
             {
@@ -164,21 +201,39 @@ class DotsMOCRParser:
                 temperature=temperature,
                 top_p=self.top_p,
             )
-        if self.abort_event is not None:
+        # One criteria serves both jobs: transformers calls it once per decoding
+        # step, which is exactly the token counter we want and the cancellation
+        # check we already needed — no streamer thread, no extra pass.
+        if self.abort_event is not None or stats is not None:
             from transformers import StoppingCriteria, StoppingCriteriaList
 
             abort_event = self.abort_event
 
-            class _AbortCriteria(StoppingCriteria):
+            class _StepCriteria(StoppingCriteria):
                 def __call__(self, input_ids, scores, **kwargs):
-                    return abort_event.is_set()
+                    if stats is not None:
+                        stats.record_token()
+                    return abort_event is not None and abort_event.is_set()
 
-            generation_kwargs["stopping_criteria"] = StoppingCriteriaList([_AbortCriteria()])
+            generation_kwargs["stopping_criteria"] = StoppingCriteriaList([_StepCriteria()])
+
         with self._generate_lock, torch.inference_mode():
+            # inside the lock: parse_pdf may run several threads against one model,
+            # and time spent waiting for the GPU is not time spent generating —
+            # starting the clock outside would inflate TTFT by the queueing delay
+            if stats is not None:
+                stats.start(prompt_tokens=int(inputs.input_ids.shape[-1]))
             generated_ids = self.model.generate(**inputs, **generation_kwargs)
         generated_ids_trimmed = [
             out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
         ]
+        if stats is not None:
+            # the sequence length is authoritative: generation may stop on EOS
+            # without the criteria seeing that step
+            stats.finish(
+                generated_tokens=int(generated_ids_trimmed[0].shape[-1]),
+                aborted=abort_event is not None and abort_event.is_set(),
+            )
         response = self.processor.batch_decode(
             generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
         )[0]
@@ -230,11 +285,15 @@ class DotsMOCRParser:
         input_height, input_width = smart_resize(image.height, image.width)
         prompt = self.get_prompt(prompt_mode, bbox, origin_image, image, min_pixels=min_pixels, max_pixels=max_pixels, custom_prompt=custom_prompt)
         
-        response = self._inference(image, prompt, temperature=temperature)
+        stats = GenerationStats()
+        if self.generation_listener is not None:
+            self.generation_listener(stats)
+        response = self._inference(image, prompt, temperature=temperature, stats=stats)
 
         result = {'page_no': page_idx,
             "input_height": input_height,
-            "input_width": input_width
+            "input_width": input_width,
+            "generation": stats.to_dict(),
         }
         if source == 'pdf':
             save_name = f"{save_name}_page_{page_idx}"
@@ -503,9 +562,15 @@ def main():
         help="Path to model checkpoint"
     )
     parser.add_argument(
-        "--attn_implementation", type=str, default="sdpa",
-        choices=["sdpa", "flash_attention_2", "eager"],
-        help="Attention implementation (default: sdpa)"
+        "--attn_implementation", type=str, default="flex_attention",
+        choices=["flex_attention", "sdpa", "flash_attention_2", "eager"],
+        help="VISION attention implementation (default: flex_attention)"
+    )
+    parser.add_argument(
+        "--llm_attn_implementation", type=str, default="sdpa",
+        choices=["sdpa", "flex_attention", "flash_attention_2", "eager"],
+        help="Language model attention implementation (default: sdpa, the fastest "
+             "measured for single-token decode)"
     )
     parser.add_argument(
         "--device", type=str, default="auto",
@@ -566,6 +631,7 @@ def main():
         min_pixels=args.min_pixels,
         max_pixels=args.max_pixels,
         attn_implementation=args.attn_implementation,
+        llm_attn_implementation=args.llm_attn_implementation,
         device=args.device,
         dtype=args.dtype,
     )

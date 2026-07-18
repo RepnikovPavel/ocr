@@ -28,6 +28,10 @@ async function pollState() {
     renderDevices(data.devices, data.worker);
     renderGpus(data.gpus);
     renderTasks(data.tasks);
+    // painted after renderTasks, and separately from it: the tokens/s readout
+    // changes on every poll, and folding it into the task signature would
+    // rebuild the queue DOM twice a second just to update one number
+    renderLiveTps(data.worker && data.worker.live);
     initPeer(data);
     if (!state.promptModes.length) initModes(data);
   } catch (err) { /* server restarting; keep polling */ }
@@ -37,6 +41,7 @@ setInterval(pollState, 2000);
 function renderModel(worker) {
   const el = $("model-state");
   let text = worker.model_state + (worker.device ? ` @ ${worker.device}` : "");
+  if (worker.attn_implementation) text += ` · ${worker.attn_implementation}`;
   if (worker.model_state === "stopped") {
     text += worker.paused ? " (пауза)" : " (загрузится по запросу)";
   }
@@ -372,7 +377,8 @@ function renderTasks(tasks) {
     if (t.status === "running") {
       const {pct, eta} = taskProgress(t);
       bar = `<div class="progress"><i style="width:${pct}%"></i></div>
-             <span class="muted">${pct}% · осталось ${formatEta(eta)}</span>`;
+             <span class="muted">${pct}% · осталось ${formatEta(eta)}</span>
+             <span class="tps" data-task="${t.id}"></span>`;
     } else if (t.status === "queued") {
       const eta = pageSeconds(t) * t.pages.length;
       bar = `<span class="muted">оценка: ${formatEta(Math.round(eta))}</span>`;
@@ -387,6 +393,27 @@ function renderTasks(tasks) {
       ${t.result.length ? `<button class="tiny" onclick="watchTask('${t.id}')">показать</button>` : ""}
     </div>`;
   }).join("") || '<span class="muted">нет активных задач</span>';
+}
+
+/* Live generation speed for the page being decoded right now. The worker
+   publishes the counters straight off the running generate() call, so this is
+   the real decode rate, not an average over the task. */
+function formatTps(live) {
+  if (!live || live.done) return "";
+  if (!live.generated_tokens) return "префилл (кодируем страницу)…";
+  const rate = live.decode_tps || live.total_tps;
+  const parts = [];
+  if (rate) parts.push(`<b>${rate.toFixed(1)} t/s</b>`);
+  parts.push(`${live.generated_tokens} ток.`);
+  if (live.ttft_seconds) parts.push(`TTFT ${live.ttft_seconds.toFixed(1)}s`);
+  return parts.join(" · ");
+}
+
+function renderLiveTps(live) {
+  document.querySelectorAll(".tps").forEach((el) => {
+    const mine = live && live.task_id === el.dataset.task;
+    el.innerHTML = mine ? formatTps(live) : "";
+  });
 }
 
 window.cancelTask = (id) => fetch(`/api/tasks/${id}/cancel`, {method: "POST"}).then(pollState);
@@ -520,7 +547,13 @@ function resultCard(page) {
   const card = document.createElement("div");
   card.className = "result-card";
   const urls = page.urls || {};
-  card.innerHTML = `<h4>Страница ${page.page_no + 1} <span class="muted">${page.seconds ?? "?"}s</span></h4>
+  const gen = page.generation || {};
+  const genInfo = gen.generated_tokens
+    ? ` · ${gen.generated_tokens} ток.` +
+      (gen.decode_tps ? ` · ${gen.decode_tps.toFixed(1)} t/s` : "") +
+      (gen.ttft_seconds ? ` · TTFT ${gen.ttft_seconds.toFixed(1)}s` : "")
+    : "";
+  card.innerHTML = `<h4>Страница ${page.page_no + 1} <span class="muted">${page.seconds ?? "?"}s${genInfo}</span></h4>
     <div class="result-tabs"></div><div class="result-body"><span class="muted">…</span></div>`;
   const tabs = card.querySelector(".result-tabs");
   const body = card.querySelector(".result-body");

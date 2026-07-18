@@ -37,8 +37,8 @@ def build_parser():
         "--attn-implementation",
         "--attn_implementation",
         dest="attn_implementation",
-        choices=("sdpa", "flash_attention_2", "eager"),
-        default="sdpa",
+        choices=("flex_attention", "sdpa", "flash_attention_2", "eager"),
+        default="flex_attention",
     )
     parser.add_argument(
         "--max-new-tokens",

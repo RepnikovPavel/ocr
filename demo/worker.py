@@ -55,21 +55,48 @@ def default_temperature(prompt_mode):
     return PROMPT_TO_TEMPERATURE.get(prompt_mode, DEFAULT_TEMPERATURE)
 
 
+_default_attn = None
+
+
+def default_attn_implementation():
+    """The parser's own default backend, read from its signature.
+
+    Resolved lazily and cached: importing dots_mocr pulls in torch, which this
+    module deliberately avoids at import time. Reading the signature rather than
+    hard-coding the string keeps the demo from carrying a second copy of the
+    default that could silently drift from the parser's.
+    """
+    global _default_attn
+    if _default_attn is None:
+        import inspect
+
+        from dots_mocr.cli import DotsMOCRParser
+
+        parameter = inspect.signature(DotsMOCRParser).parameters["attn_implementation"]
+        _default_attn = parameter.default
+    return _default_attn
+
+
 class DemoWorker(threading.Thread):
     """One worker per demo process; the parser is used only by this thread."""
 
     def __init__(self, ckpt, jobs_dir, device="auto", dpi=150,
                  max_pixels=2_200_000, max_completion_tokens=16384,
                  parser_factory=None, autostart=False, keep_loaded=False,
-                 idle_unload_seconds=180):
+                 idle_unload_seconds=180, attn_implementation=None):
         super().__init__(daemon=True, name="demo-worker")
         self.ckpt = ckpt
         self.jobs_dir = Path(jobs_dir)
         self.device = device
+        # None => whatever DotsMOCRParser defaults to, so the demo never carries
+        # a second copy of that default that could drift from the parser's.
+        self.attn_implementation = attn_implementation
         self.dpi = dpi
-        # 24GB cards: the quadratic vision attention OOMs above ~2.2M px/page
-        # (see reports/benchmark_2x4090_2026-07-15.md); authors' 11.3M default
-        # assumes larger VRAM or vLLM.
+        # Was chosen because the dense sdpa mask OOMed above ~2.2M px/page on 24GB
+        # (reports/benchmark_2x4090_2026-07-15.md). The flex_attention backend
+        # removed that wall — 2.2M px now fits in 6.2 GiB on a 12GB card, where sdpa
+        # cannot run it at all (reports/flexattn/) — so this cap is now about decode
+        # time per page, not memory. The authors' 11.3M default still assumes vLLM.
         self.max_pixels = max_pixels
         self.max_completion_tokens = max_completion_tokens
         self._parser_factory = parser_factory or self._default_parser_factory
@@ -80,6 +107,11 @@ class DemoWorker(threading.Thread):
         self.keep_loaded = keep_loaded
         self.idle_unload_seconds = idle_unload_seconds
         self.current_task_id = None
+        # GenerationStats of the page being decoded right now. The parser mutates
+        # it in place, so /api/state reads live tokens/s straight off this object
+        # without any per-token bookkeeping of our own.
+        self.live_stats = None
+        self.live_page = None
         self.abort_event = threading.Event()
         self._last_used = time.time()
         self._load_now = autostart         # explicit load request pending
@@ -155,6 +187,32 @@ class DemoWorker(threading.Thread):
             "current_task_id": self.current_task_id,
             "device": getattr(self.parser, "device", None) if self.parser else None,
             "configured_device": self.device,  # user-selected target (even when unloaded)
+            # once loaded the parser knows the EFFECTIVE backend (it may have
+            # demoted flex to sdpa on cpu); before that, show what will be used
+            "attn_implementation": (getattr(self.parser, "attn_implementation", None)
+                                    if self.parser
+                                    else (self.attn_implementation or self._default_attn())),
+            "live": self.live_generation(),
+        }
+
+    @staticmethod
+    def _default_attn():
+        """Never let a status poll fail because the default could not be read."""
+        try:
+            return default_attn_implementation()
+        except Exception:  # noqa: BLE001 - status must not raise
+            return None
+
+    def live_generation(self):
+        """Snapshot of the in-flight generation for the UI's tokens/s readout."""
+        stats = self.live_stats
+        if stats is None or stats.started_at is None:
+            return None
+        return {
+            "task_id": self.current_task_id,
+            "page_no": self.live_page,
+            "done": stats.finished_at is not None,
+            **stats.to_dict(),
         }
 
     # ------------------------------------------------------------ model
@@ -171,7 +229,12 @@ class DemoWorker(threading.Thread):
             dpi=self.dpi,
             max_pixels=self.max_pixels,
             num_thread=1,
+            **({"attn_implementation": self.attn_implementation}
+               if self.attn_implementation else {}),
         )
+
+    def _on_generation_start(self, stats):
+        self.live_stats = stats
 
     def _load_model(self):
         self.model_state = "loading"
@@ -179,6 +242,7 @@ class DemoWorker(threading.Thread):
         try:
             self.parser = self._parser_factory()
             self.parser.abort_event = self.abort_event
+            self.parser.generation_listener = self._on_generation_start
             self.model_state = "loaded"
             self._last_used = time.time()
         except Exception as error:  # surfaced in the UI
@@ -274,6 +338,8 @@ class DemoWorker(threading.Thread):
                 pass
         finally:
             self.current_task_id = None
+            self.live_stats = None
+            self.live_page = None
             self.abort_event.clear()
 
     @staticmethod
@@ -344,6 +410,7 @@ class DemoWorker(threading.Thread):
             )
 
             started = time.time()
+            self.live_page = page_no
             if job["kind"] == "pdf":
                 rendered = load_pdf_pages(str(input_path), dpi=dpi, page_ids=[page_no])
                 if not rendered:

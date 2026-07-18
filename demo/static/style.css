@@ -82,3 +82,5 @@ a#peer-link:hover { text-decoration: underline; }
 .md-render .math-display { display: block; text-align: center; margin: 8px 0; overflow-x: auto; overflow-y: hidden; }
 .md-render mjx-container { color: #e6e8f0; max-width: 100%; }
 .md-render mjx-container svg { max-width: 100%; }
+.tps { color: #8fb4e3; font-size: 0.85em; margin-left: 6px; }
+.tps b { color: #b9d4ff; }
