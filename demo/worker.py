@@ -111,10 +111,12 @@ class DemoWorker(threading.Thread):
         self.model_state = "stopped"       # stopped | loading | loaded | error
         self.model_error = None
         self.paused = False                # paused => no auto-load on demand
-        # Idle-unloading exists to hand the GPU back between tasks. With vLLM the
-        # GPU belongs to the server, so unloading would only drop a healthy HTTP
-        # client and show a misleading "выгрузка через N s" countdown.
-        self.keep_loaded = keep_loaded or engine == "vllm"
+        # Idle-unloading hands the GPU back when no agent is asking for anything.
+        # It applies to both engines: the in-process one drops its weights, and
+        # the vLLM one is put to sleep, which returns the server's memory too
+        # (measured 9.6 -> 2.3 GiB). The next queued task wakes it automatically,
+        # so an idle service costs no VRAM and a busy one is unaffected.
+        self.keep_loaded = keep_loaded
         self.idle_unload_seconds = idle_unload_seconds
         self.current_task_id = None
         # GenerationStats of the page being decoded right now. The parser mutates
@@ -506,3 +508,40 @@ class DemoWorker(threading.Thread):
             task["id"], status="done", result=results,
             progress={"done": total, "total": total}, finished_at=time.time(),
         )
+        self._record_in_docstore(task, job, results)
+
+    @staticmethod
+    def _record_in_docstore(task, job, results):
+        """Cache the finished parse so an identical resubmission is a lookup.
+
+        Only tasks that came in through the agent API carry a sha256, and only a
+        complete result is worth caching — a cancelled or partial run would
+        otherwise be served forever as the answer.
+        """
+        sha256 = (task.get("params") or {}).get("sha256")
+        if not sha256 or not results:
+            return
+        from demo import docstore
+
+        pieces = []
+        tokens = 0
+        seconds = 0.0
+        for page in results:
+            path = page.get("md_content_path")
+            if path:
+                try:
+                    pieces.append(Path(path).read_text(encoding="utf-8"))
+                except OSError:
+                    continue
+            tokens += (page.get("generation") or {}).get("generated_tokens") or 0
+            seconds += page.get("seconds") or 0
+        if not pieces:
+            return
+        try:
+            docstore.store_result(
+                sha256=sha256, prompt_mode=task["prompt_mode"], pages=task["pages"],
+                task_id=task["id"], job_id=job["id"], markdown="\n\n".join(pieces),
+                pages_done=len(results), generated_tokens=tokens,
+                seconds=round(seconds, 2), filename=job.get("filename") or "")
+        except Exception:  # noqa: BLE001 - caching must never fail a finished task
+            traceback.print_exc()
