@@ -128,6 +128,55 @@ Same card, same checkpoint, same page, same prompt, greedy, prefix caching
 **Answer to "have we extracted everything": no — roughly half.** The remaining ~2x
 is entirely in the decode loop, exactly where §2 and §4 said it was.
 
+## 5a. Do all four backends give the same answer?
+
+Same images, same prompt, same page budget, four backends: `sdpa`,
+`flash_attention_2`, `flex_attention` (this repo's vision tower) and vLLM (a
+separate engine). Inputs are the upstream project's own showcase images, because
+there is no golden output to compare against — upstream publishes rendered PNGs
+of its results, no machine-readable expected output and no statement about
+determinism. Run on the server's 2x RTX 5060 Ti (Blackwell, sm_120) at 1.0 Mpx.
+Reproduce with `scripts/run_agreement_matrix.sh`.
+
+| pair | equivalent | byte-identical |
+|---|---|---|
+| flash vs flex | 1/3 | 0/5 |
+| flash vs sdpa | 1/3 | 1/5 |
+| flash vs vLLM | 1/3 | 1/5 |
+| flex vs sdpa | 2/3 | 1/5 |
+| flex vs vLLM | 0/3 | 0/5 |
+| sdpa vs vLLM | 0/3 | 0/5 |
+
+Two of the five images hit the token cap mid-JSON and are reported as
+inconclusive rather than as disagreement — a truncated answer is a measurement
+that never finished.
+
+**No pair agrees fully, and no backend is the reference.** What settles the
+question is that the camps reshuffle from image to image:
+
+| image | who agrees with whom |
+|---|---|
+| `general_qa.jpg` | {flash, vLLM} vs {flex, sdpa} |
+| `table_1.jpg` | {flash, sdpa} vs {flex} vs {vLLM} |
+| `formula_1.jpg` | all four differ |
+
+A systematic property of a kernel family would produce the same split every
+time. These do not, which is the signature of near-tie argmax steps resolving
+differently under bf16 rounding — the same effect that makes `sdpa` disagree with
+itself across torch builds (§1).
+
+The differences themselves: a picture bbox whose lower edge is genuinely
+ambiguous (1956 vs 1206 on an image with 58 tokens of output and no text), a
+1-pixel table bbox, and one LaTeX formula emitted with or without an `aligned`
+environment. Nothing that looks like a broken mask, which would corrupt a
+spatially contiguous region rather than a single token.
+
+**Practical consequence.** Byte equality across backends is not achievable for
+this model and is the wrong acceptance criterion. What the regression suite
+asserts instead: mask identity exactly (`torch.equal`), tower equivalence in
+fp32 (~1e-4), and semantic equivalence end to end — same blocks, categories and
+text, bboxes within a few pixels.
+
 ## 6. Ranked next steps
 
 | # | change | expected | why |
