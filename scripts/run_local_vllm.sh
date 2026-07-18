@@ -9,6 +9,10 @@
 #
 # One GPU cannot hold both engines: vLLM reserves most of the card, so the demo
 # must not also load the model. That is exactly what DEMO_ENGINE=vllm ensures.
+#
+# vLLM starts with --enable-sleep-mode and VLLM_SERVER_DEV_MODE=1 so the demo's
+# load/unload buttons can actually free the card (measured 9.2 -> 2.3 GiB) rather
+# than only dropping an HTTP client while claiming the model was unloaded.
 set -Eeuo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -51,10 +55,12 @@ if ! curl -sf --max-time 3 "http://127.0.0.1:${VLLM_PORT}/health" >/dev/null 2>&
     docker run -d --rm --name "$CONTAINER" --gpus all --ipc=host --network host \
         -v /mnt:/mnt:ro -v "$STATE:/state" \
         -e HF_HUB_OFFLINE=1 -e TRANSFORMERS_OFFLINE=1 -e HF_HOME=/tmp/hf \
+        -e VLLM_SERVER_DEV_MODE=1 \
         "$VLLM_IMAGE" /state/vllm_ckpt \
         --served-model-name rednote-hilab/dots.mocr \
         --gpu-memory-utilization "$GPU_UTIL" --max-model-len "$MAX_LEN" \
         --chat-template-content-format string --trust-remote-code \
+        --enable-sleep-mode \
         --host 127.0.0.1 --port "$VLLM_PORT" >/dev/null
 
     echo -n "waiting for vLLM"

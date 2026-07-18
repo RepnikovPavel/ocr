@@ -262,6 +262,19 @@ class DemoWorker(threading.Thread):
     def _load_model(self):
         self.model_state = "loading"
         self.model_error = None
+        # A vLLM parser that is merely asleep only needs waking; rebuilding the
+        # client would leave the weights offloaded and the card still empty.
+        if self.engine == "vllm" and self.parser is not None:
+            try:
+                self.parser.wake()
+                self.model_state = "loaded"
+                self._last_used = time.time()
+            except Exception as error:  # surfaced in the UI
+                self.model_state = "error"
+                self.model_error = f"{type(error).__name__}: {error}"
+                self.paused = True
+                traceback.print_exc()
+            return
         try:
             self.parser = self._parser_factory()
             self.parser.abort_event = self.abort_event
@@ -276,6 +289,19 @@ class DemoWorker(threading.Thread):
             traceback.print_exc()
 
     def _unload_model(self):
+        if self.engine == "vllm" and self.parser is not None:
+            # The GPU belongs to the vLLM server. Dropping our HTTP client would
+            # free nothing while the UI reported "stopped", so ask the server to
+            # offload its weights instead — that is what actually returns memory.
+            try:
+                self.parser.sleep()
+                self.model_state = "stopped"
+            except Exception as error:  # noqa: BLE001 - report, do not pretend
+                self.model_state = "error"
+                self.model_error = f"{type(error).__name__}: {error}"
+                traceback.print_exc()
+            return
+
         parser = self.parser
         self.parser = None
         if self.model_state != "error":

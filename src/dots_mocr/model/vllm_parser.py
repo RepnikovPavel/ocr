@@ -188,3 +188,49 @@ class VllmDotsMOCRParser(DotsMOCRParser):
     def warm_up(self):
         """Nothing to warm: the server owns the weights and its own compilation."""
         return True
+
+    # ------------------------------------------------------------ GPU lifecycle
+    #
+    # The demo's load/unload buttons exist to hand the card back between tasks.
+    # With this engine the card belongs to the vLLM process, so dropping our HTTP
+    # client would free nothing while the UI claimed otherwise. vLLM's own sleep
+    # mode is the honest equivalent: it offloads the weights and returns the
+    # memory (measured 9.2 -> 2.3 GiB), and wake_up restores them.
+    #
+    # The endpoints are only registered when the server runs with
+    # --enable-sleep-mode and VLLM_SERVER_DEV_MODE=1 (see scripts/run_local_vllm.sh);
+    # against a server without them these raise, and the caller reports that
+    # rather than pretending the memory was released.
+
+    def _dev_endpoint(self, path, params=None):
+        import httpx
+
+        base = self.vllm_url[: -len("/v1")] if self.vllm_url.endswith("/v1") else self.vllm_url
+        with httpx.Client(timeout=120.0) as client:
+            response = client.post(f"{base}{path}", params=params)
+            if response.status_code == 404:
+                raise VllmUnavailable(
+                    f"{path} is not available on this vLLM server. Start it with "
+                    "--enable-sleep-mode and VLLM_SERVER_DEV_MODE=1 to let the demo "
+                    "free the GPU between tasks.")
+            response.raise_for_status()
+            return response
+
+    def sleep(self, level=1):
+        """Ask vLLM to offload its weights and return the GPU memory."""
+        self._dev_endpoint("/sleep", params={"level": level})
+
+    def wake(self):
+        self._dev_endpoint("/wake_up")
+
+    def is_sleeping(self):
+        import httpx
+
+        base = self.vllm_url[: -len("/v1")] if self.vllm_url.endswith("/v1") else self.vllm_url
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                response = client.get(f"{base}/is_sleeping")
+                response.raise_for_status()
+                return bool(response.json().get("is_sleeping"))
+        except Exception:  # noqa: BLE001 - unknown means "assume awake"
+            return False
