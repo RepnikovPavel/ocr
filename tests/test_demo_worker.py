@@ -280,3 +280,53 @@ def test_worker_image_job_uses_fitz_preprocess_map(env, tmp_path, synthetic_page
         assert call["fitz_preprocess"] is True  # authors enable it for prompt_ocr
     finally:
         worker.shutdown()
+
+
+class SleepingParser:
+    """A parser that owns its weights elsewhere and can offload them on request,
+    the way the vLLM engine does through the server's sleep mode."""
+
+    def __init__(self):
+        self.asleep = False
+        self.abort_event = None
+        self.generation_listener = None
+        self.max_completion_tokens = 128
+
+    def sleep(self):
+        self.asleep = True
+
+    def wake(self):
+        self.asleep = False
+
+
+def test_unload_offloads_instead_of_dropping_a_sleepable_parser(tmp_path):
+    """Unload must free the GPU, not merely discard the client.
+
+    With vLLM the card belongs to the server, so discarding the parser would
+    report "stopped" while the memory stayed occupied. A parser that can sleep is
+    asked to, and is kept so that load can wake the same one.
+    """
+    parser = SleepingParser()
+    worker = DemoWorker(ckpt="/nonexistent", jobs_dir=tmp_path,
+                        parser_factory=lambda: parser, engine="vllm")
+    worker._load_model()
+    assert worker.model_state == "loaded"
+
+    worker._unload_model()
+    assert worker.model_state == "stopped"
+    assert parser.asleep is True
+    assert worker.parser is parser, "the parser must survive so load can wake it"
+
+    worker._load_model()
+    assert worker.model_state == "loaded"
+    assert parser.asleep is False
+
+
+def test_unload_still_discards_a_parser_that_cannot_sleep(tmp_path):
+    """The in-process engine has no sleep: dropping it is what frees the GPU."""
+    worker = DemoWorker(ckpt="/nonexistent", jobs_dir=tmp_path,
+                        parser_factory=lambda: StubParser())
+    worker._load_model()
+    worker._unload_model()
+    assert worker.model_state == "stopped"
+    assert worker.parser is None
