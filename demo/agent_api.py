@@ -236,8 +236,12 @@ def document_bundle(sha256: str, prompt_mode: str = None):
 
 @router.get("/documents")
 def search_documents(q: str = None, limit: int = 20):
-    if not q:
-        return {"results": docstore.recent(limit=limit), "query": None}
+    # An empty `q` used to return the full recent list — that confused clients
+    # (rows with empty `snippet`) and made "no matches" indistinguishable from
+    # "I forgot to pass a query". Reject it explicitly; listing all documents
+    # is a separate concern that belongs on its own endpoint if ever needed.
+    if not q or not q.strip():
+        raise HTTPException(400, "q query parameter is required and must be non-empty")
     try:
         return {"results": docstore.search(q, limit=limit), "query": q}
     except ValueError as error:
