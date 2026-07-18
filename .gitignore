@@ -16,3 +16,4 @@ local_state/
 # The curated summary lives in reports/perf-findings.md.
 reports/flexattn/
 reports/profile/
+reports/vllm/

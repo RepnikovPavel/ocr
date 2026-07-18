@@ -3,7 +3,7 @@
 Measured on RTX 4070 Ti (12 GiB, sm_89), torch 2.12+cu130, transformers 5.5.4,
 bfloat16, page `Searching_for_MobileNet_V3.pdf` at 2.13 Mpx.
 Reproduce: `benchmarks/bench_attention.py`, `benchmarks/profile_stages.py`,
-`benchmarks/token_budget.py` (raw JSON output is gitignored).
+`benchmarks/token_budget.py`, `benchmarks/bench_vllm.py` (raw JSON output is gitignored).
 
 Measured hardware limits (not spec sheet): bf16 GEMM **77.6 TFLOP/s**,
 fp8 e4m3 GEMM **148.4 TFLOP/s**, memory bandwidth **391 GB/s**.
@@ -82,7 +82,34 @@ Arithmetic intensity at batch 1 is **1 FLOP/byte**; this card needs 198 FLOP/byt
 to become compute-bound. Compute sits ~99.4 % idle. Measured on one real layer:
 batch 64 runs *faster in absolute terms* than batch 1 while doing 64x the work.
 
-## 5. Ranked next steps
+## 5. vLLM baseline — we are at half of what the card allows
+
+Same card, same checkpoint, same page, same prompt, greedy, prefix caching
+**disabled** on the vLLM side so both engines actually run prefill
+(vLLM 0.17.1, which supports `DotsOCRForCausalLM` natively; see `docker/Dockerfile.vllm`).
+
+| page | tokens | vLLM TTFT | vLLM tok/s | vLLM s | ours TTFT | ours tok/s | ours s | gap |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 1277 | 1.31 | 119.6 | 11.98 | 1.32 | 62.0 | 21.89 | 1.83x |
+| 1 | 1549 | 1.28 | 120.5 | 14.13 | 1.31 | 62.9 | 25.92 | 1.83x |
+| 2 | 1555 | 1.29 | 119.9 | 14.28 | 1.31 | 64.2 | 25.52 | 1.79x |
+| 3 | 1684 | 1.30 | 119.9 | 15.35 | 1.33 | 61.0 | 28.91 | 1.88x |
+
+- **Prefill and the vision tower are at parity**: mean TTFT 1.30 s vs 1.32 s. The
+  attention work in this repo holds up — that half of the pipeline is not the problem.
+- **Decoding is 1.92x behind**: 120.0 vs 62.5 tokens/s, which drags the whole page
+  to ~1.85x.
+- Against the bandwidth ceiling computed in §4 (127 tokens/s), **vLLM reaches 94 %
+  and we reach 49 %**. That is independent confirmation that the ceiling is real
+  and reachable on this hardware — the headroom is not theoretical.
+- vLLM's startup log shows `Capturing CUDA graphs`, which is item 2 below. It also
+  batches: 4 concurrent pages give **379.8 tokens/s aggregate** (108.3 each), where
+  this repo serves strictly one generation at a time.
+
+**Answer to "have we extracted everything": no — roughly half.** The remaining ~2x
+is entirely in the decode loop, exactly where §2 and §4 said it was.
+
+## 6. Ranked next steps
 
 | # | change | expected | why |
 |---|---|---|---|
@@ -97,3 +124,8 @@ batch 64 runs *faster in absolute terms* than batch 1 while doing 64x the work.
 - One run per configuration, median of 3 timings per stage.
 - Achieved TFLOP/s come from an analytic model of the geometry, not hardware counters.
 - Profiled on one page of one document; the decode share grows with output length.
+- vLLM was given `--gpu-memory-utilization 0.85` (the desktop session holds ~1.2 GiB)
+  and `--max-model-len 12288`; it reported a 25,792-token KV cache.
+- The vLLM run needs `auto_map` in `config.json`, which `scripts/prepare_checkpoint.py`
+  strips for this repo's own loader. The benchmark serves a symlink directory with
+  the original config restored rather than modifying the checkpoint.
