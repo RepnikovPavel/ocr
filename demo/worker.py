@@ -83,7 +83,8 @@ class DemoWorker(threading.Thread):
     def __init__(self, ckpt, jobs_dir, device="auto", dpi=150,
                  max_pixels=2_200_000, max_completion_tokens=16384,
                  parser_factory=None, autostart=False, keep_loaded=False,
-                 idle_unload_seconds=180, attn_implementation=None):
+                 idle_unload_seconds=180, attn_implementation=None,
+                 engine="transformers", vllm_url=None, vllm_model=None):
         super().__init__(daemon=True, name="demo-worker")
         self.ckpt = ckpt
         self.jobs_dir = Path(jobs_dir)
@@ -91,6 +92,12 @@ class DemoWorker(threading.Thread):
         # None => whatever DotsMOCRParser defaults to, so the demo never carries
         # a second copy of that default that could drift from the parser's.
         self.attn_implementation = attn_implementation
+        # "transformers" runs the model in this process; "vllm" drives a server
+        # that owns the GPU instead. Everything downstream — artifacts, the queue,
+        # the tokens/s readout — is identical, so the two are directly comparable.
+        self.engine = engine
+        self.vllm_url = vllm_url or "http://127.0.0.1:8000/v1"
+        self.vllm_model = vllm_model or "rednote-hilab/dots.mocr"
         self.dpi = dpi
         # Was chosen because the dense sdpa mask OOMed above ~2.2M px/page on 24GB
         # (reports/benchmark_2x4090_2026-07-15.md). The flex_attention backend
@@ -104,7 +111,10 @@ class DemoWorker(threading.Thread):
         self.model_state = "stopped"       # stopped | loading | loaded | error
         self.model_error = None
         self.paused = False                # paused => no auto-load on demand
-        self.keep_loaded = keep_loaded
+        # Idle-unloading exists to hand the GPU back between tasks. With vLLM the
+        # GPU belongs to the server, so unloading would only drop a healthy HTTP
+        # client and show a misleading "выгрузка через N s" countdown.
+        self.keep_loaded = keep_loaded or engine == "vllm"
         self.idle_unload_seconds = idle_unload_seconds
         self.current_task_id = None
         # GenerationStats of the page being decoded right now. The parser mutates
@@ -187,11 +197,13 @@ class DemoWorker(threading.Thread):
             "current_task_id": self.current_task_id,
             "device": getattr(self.parser, "device", None) if self.parser else None,
             "configured_device": self.device,  # user-selected target (even when unloaded)
+            "engine": self.engine,
             # once loaded the parser knows the EFFECTIVE backend (it may have
             # demoted flex to sdpa on cpu); before that, show what will be used
-            "attn_implementation": (getattr(self.parser, "attn_implementation", None)
-                                    if self.parser
-                                    else (self.attn_implementation or self._default_attn())),
+            "attn_implementation": (
+                None if self.engine == "vllm"
+                else (getattr(self.parser, "attn_implementation", None) if self.parser
+                      else (self.attn_implementation or self._default_attn()))),
             "live": self.live_generation(),
         }
 
@@ -218,19 +230,30 @@ class DemoWorker(threading.Thread):
     # ------------------------------------------------------------ model
 
     def _default_parser_factory(self):
-        from dots_mocr.cli import DotsMOCRParser
-
-        return DotsMOCRParser(
+        common = dict(
             ckpt=self.ckpt,
-            device=self.device,
-            dtype="bfloat16" if self.device != "cpu" else "float32",
             temperature=DEFAULT_TEMPERATURE,
             max_completion_tokens=self.max_completion_tokens,
             dpi=self.dpi,
             max_pixels=self.max_pixels,
             num_thread=1,
+        )
+        if self.engine == "vllm":
+            from dots_mocr.model.vllm_parser import VllmDotsMOCRParser
+
+            return VllmDotsMOCRParser(
+                vllm_url=self.vllm_url, vllm_model=self.vllm_model,
+                device="vllm", dtype="auto", **common,
+            )
+
+        from dots_mocr.cli import DotsMOCRParser
+
+        return DotsMOCRParser(
+            device=self.device,
+            dtype="bfloat16" if self.device != "cpu" else "float32",
             **({"attn_implementation": self.attn_implementation}
                if self.attn_implementation else {}),
+            **common,
         )
 
     def _on_generation_start(self, stats):

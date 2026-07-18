@@ -41,6 +41,10 @@ setInterval(pollState, 2000);
 function renderModel(worker) {
   const el = $("model-state");
   let text = worker.model_state + (worker.device ? ` @ ${worker.device}` : "");
+  // the device already reads "vllm" for that engine; do not say it twice
+  if (worker.engine && worker.engine !== "transformers" && worker.engine !== worker.device) {
+    text += ` · ${worker.engine}`;
+  }
   if (worker.attn_implementation) text += ` · ${worker.attn_implementation}`;
   if (worker.model_state === "stopped") {
     text += worker.paused ? " (пауза)" : " (загрузится по запросу)";
