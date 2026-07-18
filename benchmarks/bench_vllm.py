@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Benchmark this repository's transformers inference against a vLLM server.
 
+Speed is only half the question: an engine that is 2x faster with different output
+is not a drop-in replacement. Every run therefore also compares what the two
+engines actually said, page by page, with the same semantic criterion the
+attention-backend benchmark uses (identical text and categories, bboxes within a
+few pixels) — byte equality is unreachable in bf16 for any pair of backends.
+
 The question this answers: is the hand-tuned path in this repo anywhere near a
 production engine on the same card, or is vLLM out of the box already ahead?
 
@@ -242,6 +248,28 @@ def main():
             print(f"  page {page_no}: TTFT {result['ttft_seconds']}s, "
                   f"{result['generated_tokens']} tok, {result['decode_tps']} tok/s, "
                   f"{result['wall_seconds']}s", flush=True)
+
+    # ---- do the two engines agree? -------------------------------------
+    if not args.skip_local:
+        from benchmarks.bench_attention import semantic_match
+
+        print("\n=== agreement (vLLM is the reference) ===", flush=True)
+        by_engine = {}
+        for row in report["pages"]:
+            by_engine.setdefault(row["engine"], {})[row["page_no"]] = row["response"]
+        verdicts = []
+        for page_no, reference in sorted(by_engine.get("vllm", {}).items()):
+            candidate = by_engine.get("transformers", {}).get(page_no)
+            if candidate is None:
+                continue
+            ok, why = semantic_match(reference, candidate)
+            verdicts.append({"page_no": page_no, "equivalent": ok, "detail": why})
+            print(f"  page {page_no}: {'OK  ' if ok else 'DIFF'} {why}", flush=True)
+        report["agreement"] = {
+            "pages_compared": len(verdicts),
+            "pages_equivalent": sum(1 for v in verdicts if v["equivalent"]),
+            "per_page": verdicts,
+        }
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

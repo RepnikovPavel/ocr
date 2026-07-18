@@ -25,10 +25,25 @@ Vision tower only, decoder pinned to sdpa in all three runs:
   therefore fell off the fused kernels: 4.7x slower, 2.5 GiB heavier, and unable to
   process a 2.13 Mpx page on a 12 GiB card at all (needs 5.27 GiB of score matrix).
 - Decode speed is unchanged by any backend (58.6 / 59.6 / 59.8 tokens/s).
-- Outputs are semantically equal but **not bit-identical**: 42 residual vision
-  layers in bf16 are chaotically sensitive to summation order. The already-shipped
-  `eager` and `sdpa` diverge from each other just as much. Mask equivalence is
-  asserted exactly in tests; end-to-end equality is asserted semantically.
+- Outputs are semantically equal but **not bit-identical**, and no backend is the
+  reference. On page 2 the backends disagree about whether one LaTeX fragment
+  carries absolute-value bars — and **`sdpa` lands on both sides**: bars present
+  under torch 2.12, absent under torch 2.11, with field-for-field identical configs.
+  The tally is 3-3 (present: sdpa/2.12, flash_attention_2, vLLM; absent: sdpa/2.11,
+  flex under both builds), so the split cuts through a single backend.
+
+  Greedy decoding is an argmax, so any step with a top-1/top-2 margin thinner than
+  the bf16 perturbation is a coin flip. **A single differing token is not evidence
+  that a backend is wrong** — at the measured ~0.33 semantic differences per page,
+  the 95 % interval on one observed event spans a factor of ~220, and separating a
+  doubled error rate from noise would need ~74 pages per arm.
+
+  Worth noting for regression design: **flex is the more reproducible backend.** It
+  is byte-identical across both torch builds, while sdpa differs from *itself* in 28
+  tokens; flex is 3 diff-chunks from sdpa/2.12 while sdpa/2.12 is 11 from sdpa/2.11.
+  So byte-equality against sdpa is not a valid oracle. Mask identity is asserted
+  exactly (`torch.equal`), fp32 tower equivalence to ~1e-4, and end-to-end equality
+  semantically.
 
 ## 2. Where a page actually goes
 
@@ -105,6 +120,10 @@ Same card, same checkpoint, same page, same prompt, greedy, prefix caching
 - vLLM's startup log shows `Capturing CUDA graphs`, which is item 2 below. It also
   batches: 4 concurrent pages give **379.8 tokens/s aggregate** (108.3 each), where
   this repo serves strictly one generation at a time.
+- **Output agreement**: of 4 pages, 1 byte-identical, 2 equal in text and categories
+  with 1-2 px bbox drift, and 1 differing by the single coin-flip token described in
+  §1. `benchmarks/bench_vllm.py` now checks this on every run, so a speed comparison
+  can never again be reported without the agreement it depends on.
 
 **Answer to "have we extracted everything": no — roughly half.** The remaining ~2x
 is entirely in the decode loop, exactly where §2 and §4 said it was.
