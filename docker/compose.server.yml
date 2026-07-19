@@ -76,10 +76,18 @@ services:
       DEMO_VLLM_URL: http://127.0.0.1:${VLLM_PORT:-8000}/v1
       DEMO_VLLM_MODEL: ${VLLM_MODEL_NAME:-rednote-hilab/dots.mocr}
       DEMO_IDLE_UNLOAD_S: ${DEMO_IDLE_UNLOAD_S:-180}
+      # Name of the vLLM container the worker stops on idle-unload to free ALL
+      # VRAM (sleep-mode alone leaves ~700 MiB of CUDA context resident).
+      # See demo/worker.py:_stop_vllm_container. Requires the docker.sock mount below.
+      DEMO_VLLM_CONTAINER: ${VLLM_CONTAINER:-dots_vllm}
       PORT: ${DEMO_PORT:-8601}
       DEMO_HOST: ${DEMO_HOST:-127.0.0.1}
       DOTS_MOCR_WEB_PORT: ${DEMO_PORT:-8601}
-      PYTHONPATH: /opt/dots-mocr:/opt/dots-mocr/src
+      # src FIRST: the image carries a copy of dots_mocr in dist-packages that is
+      # older than this checkout (it inlines pictures as base64). Putting src at
+      # the front of PYTHONPATH makes `import dots_mocr` resolve to the mounted
+      # code, so the bundle ships pictures as image files + relative links.
+      PYTHONPATH: /opt/dots-mocr/src:/opt/dots-mocr
       HOME: /tmp
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
@@ -88,6 +96,10 @@ services:
       - ${REPO_ROOT:?set by deploy_server.sh}:/opt/dots-mocr:ro
       - ${CKPT_DIR:?set by deploy_server.sh}:/models:ro
       - ${STATE_DIR:?set by deploy_server.sh}:/state
+      # Docker Engine socket: the worker stops the vLLM container on idle-unload
+      # to free ALL VRAM (not just the weights). Without this mount the stop call
+      # is a silent no-op and ~700 MiB of CUDA context stays resident on the GPU.
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       vllm:
         condition: service_healthy
