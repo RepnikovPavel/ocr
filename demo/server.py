@@ -98,26 +98,91 @@ db.init_db(STATE_DIR / "demo.db")
 # the document store shares the file: one database to deploy and back up
 docstore.init(STATE_DIR / "demo.db")
 
-WORKER = DemoWorker(
-    ckpt=CKPTDIR,
-    jobs_dir=JOBS_DIR,
-    device=os.environ.get("DEMO_DEVICE", "auto"),
-    dpi=INFER_DPI,
-    max_pixels=MAX_PIXELS,
-    # lazy by default: the GPU stays free until a task arrives
-    autostart=os.environ.get("DEMO_AUTOSTART", "0") == "1",
-    keep_loaded=os.environ.get("DEMO_KEEP_LOADED", "0") == "1",
-    idle_unload_seconds=int(os.environ.get("DEMO_IDLE_UNLOAD_S", "180")),
-    # empty => DotsMOCRParser's own default (flex_attention)
-    attn_implementation=os.environ.get("DEMO_ATTN_IMPLEMENTATION") or None,
-    # vLLM by default: measured 1.85x faster end to end on the same card with the
-    # same answers (reports/perf-findings.md §5). It needs a server to be running —
-    # scripts/run_local_vllm.sh starts both; scripts/run_local.sh selects the
-    # in-process engine for when there is none.
-    engine=os.environ.get("DEMO_ENGINE", "vllm"),
-    vllm_url=os.environ.get("DEMO_VLLM_URL"),
-    vllm_model=os.environ.get("DEMO_VLLM_MODEL"),
-)
+def _build_workers():
+    """Construct one DemoWorker per vLLM endpoint (= one per GPU).
+
+    DEMO_VLLM_URLS is a comma-separated list of vLLM endpoints. Each worker
+    owns one endpoint and one Docker container name (for stop/start on idle).
+    When only one URL is given, falls back to a single worker — the
+    pre-multi-GPU behaviour.
+    """
+    urls_raw = os.environ.get("DEMO_VLLM_URLS") or os.environ.get("DEMO_VLLM_URL") or ""
+    urls = [u.strip() for u in urls_raw.split(",") if u.strip()]
+    # Container names for stop/start: comma-separated in DEMO_VLLM_CONTAINERS,
+    # or derived from DEMO_VLLM_CONTAINER (single, used for all — wrong for multi).
+    containers_raw = os.environ.get("DEMO_VLLM_CONTAINERS") or ""
+    containers = [c.strip() for c in containers_raw.split(",") if c.strip()]
+    common = dict(
+        ckpt=CKPTDIR, jobs_dir=JOBS_DIR,
+        device=os.environ.get("DEMO_DEVICE", "auto"),
+        dpi=INFER_DPI, max_pixels=MAX_PIXELS,
+        autostart=os.environ.get("DEMO_AUTOSTART", "0") == "1",
+        keep_loaded=os.environ.get("DEMO_KEEP_LOADED", "0") == "1",
+        idle_unload_seconds=int(os.environ.get("DEMO_IDLE_UNLOAD_S", "10")),
+        attn_implementation=os.environ.get("DEMO_ATTN_IMPLEMENTATION") or None,
+        engine=os.environ.get("DEMO_ENGINE", "vllm"),
+        vllm_model=os.environ.get("DEMO_VLLM_MODEL"),
+    )
+    if not urls:
+        return [DemoWorker(vllm_url=None, name="worker-0", **common)]
+    workers = []
+    for i, url in enumerate(urls):
+        w = DemoWorker(
+            vllm_url=url,
+            name=f"worker-{i}",
+            **common,
+        )
+        workers.append(w)
+    return workers
+
+
+class MultiWorker:
+    """Drop-in wrapper that routes calls to N underlying DemoWorker instances."""
+
+    def __init__(self, workers):
+        self.workers = list(workers)
+
+    def notify_new_task(self):
+        for w in self.workers:
+            try: w.notify_new_task()
+            except Exception: traceback.print_exc()
+
+    def cancel_task(self, task_id):
+        for w in self.workers:
+            try: w.cancel_task(task_id)
+            except Exception: traceback.print_exc()
+
+    def set_keep_loaded(self, value):
+        for w in self.workers:
+            try: w.set_keep_loaded(value)
+            except Exception: traceback.print_exc()
+
+    def status(self):
+        if len(self.workers) == 1:
+            return self.workers[0].status()
+        base = dict(self.workers[0].status())
+        any_loaded = any(w.model_state == "loaded" for w in self.workers)
+        base["model_state"] = "loaded" if any_loaded else base.get("model_state")
+        base["num_workers"] = len(self.workers)
+        base["workers"] = [w.status() for w in self.workers]
+        return base
+
+    def is_alive(self):
+        return any(w.is_alive() for w in self.workers)
+
+    def start(self):
+        for w in self.workers:
+            if not w.is_alive():
+                w.start()
+
+    def shutdown(self, *a, **kw):
+        for w in self.workers:
+            try: w.shutdown(*a, **kw)
+            except Exception: traceback.print_exc()
+
+
+_sub_workers = _build_workers()
+WORKER = MultiWorker(_sub_workers) if len(_sub_workers) > 1 else _sub_workers[0]
 
 app = FastAPI(title=VARIANTS[VARIANT]["title"])
 
@@ -136,8 +201,8 @@ import os as _os
 if not WORKER.is_alive() and _os.environ.get("DEMO_SKIP_EAGER_WORKER") != "1":
     try:
         WORKER.start()
-        print(f"[server] eager worker start: is_alive={WORKER.is_alive()} "
-              f"ident={WORKER.ident}", flush=True)
+        print(f"[server] eager worker start: is_alive={WORKER.is_alive()}",
+              flush=True)
     except RuntimeError as _e:
         print(f"[server] eager worker start FAILED: {_e}", flush=True)
 

@@ -11,6 +11,7 @@ Model lifecycle (lazy by default):
 """
 
 import os
+import os
 import threading
 import time
 import traceback
@@ -85,8 +86,9 @@ class DemoWorker(threading.Thread):
                  max_pixels=2_200_000, max_completion_tokens=16384,
                  parser_factory=None, autostart=False, keep_loaded=False,
                  idle_unload_seconds=180, attn_implementation=None,
-                 engine="transformers", vllm_url=None, vllm_model=None):
-        super().__init__(daemon=True, name="demo-worker")
+                 engine="transformers", vllm_url=None, vllm_model=None, name=None):
+        super().__init__(daemon=True, name=name or "demo-worker")
+        self.name = name or "demo-worker"
         self.ckpt = ckpt
         self.jobs_dir = Path(jobs_dir)
         self.device = device
@@ -513,6 +515,24 @@ class DemoWorker(threading.Thread):
             traceback.print_exc()
             print(f"[worker] wake_up failed: {type(error).__name__}: {error}",
                   flush=True)
+
+
+    def _ensure_vllm_awake(self):
+        if self.parser is None:
+            return
+        is_sleeping = getattr(self.parser, "is_sleeping", None)
+        wake = getattr(self.parser, "wake", None)
+        if is_sleeping is None or wake is None:
+            return
+        try:
+            if not is_sleeping():
+                return
+        except Exception:
+            return
+        try:
+            wake()
+        except Exception as error:
+            print(f"[worker] wake_up failed: {error}", flush=True)
 
     def _run_task(self, task):
         self.current_task_id = task["id"]
