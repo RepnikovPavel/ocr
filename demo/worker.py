@@ -84,8 +84,13 @@ class DemoWorker(threading.Thread):
                  max_pixels=2_200_000, max_completion_tokens=16384,
                  parser_factory=None, autostart=False, keep_loaded=False,
                  idle_unload_seconds=180, attn_implementation=None,
-                 engine="transformers", vllm_url=None, vllm_model=None):
-        super().__init__(daemon=True, name="demo-worker")
+                 engine="transformers", vllm_url=None, vllm_model=None,
+                 name=None):
+        # `name` propagates to threading.Thread so multi-worker processes
+        # show distinct names in logs / py-spy. Default keeps the historical
+        # name for single-worker processes.
+        super().__init__(daemon=True, name=name or "demo-worker")
+        self.name = name or "demo-worker"
         self.ckpt = ckpt
         self.jobs_dir = Path(jobs_dir)
         self.device = device
