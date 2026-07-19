@@ -2,7 +2,7 @@
 
 Launched by demo.server as a subprocess per task. Each invocation:
   1. Claims the task from the shared SQLite DB
-  2. Loads the model on the specified GPU (via DemoWorker)
+  2. Loads the model on the specified GPU
   3. Parses all pages
   4. Exits — process death releases ALL VRAM (zero parasitic load)
 
@@ -56,57 +56,69 @@ if task["status"] == "queued":
     conn.close()
     task = db.get_task(task_id)
 
-print(f"[run_task] task={task_id} claimed, loading model...", flush=True)
+print(f"[run_task] task={task_id} claimed, loading model on "
+      f"{os.environ.get('DEMO_DEVICE', 'cuda:0')}...", flush=True)
 
+# Build the parser directly — NO DemoWorker thread, NO run() loop.
+# The run() loop would try to claim_next_task() on its own and might grab
+# a different task, causing a race with our explicit _execute call below.
+from dots_mocr.cli import DotsMOCRParser  # noqa: E402
+
+parser = DotsMOCRParser(
+    ckpt=os.environ.get("CKPTDIR", "/models"),
+    device=os.environ.get("DEMO_DEVICE", "cuda:0"),
+    dtype="bfloat16",
+    dpi=int(os.environ.get("DEMO_DPI", "150")),
+    max_pixels=int(os.environ.get("DEMO_MAX_PIXELS", "1200000")),
+    num_thread=1,
+    temperature=0.1,
+)
+parser._load_model(os.environ.get("CKPTDIR", "/models"))
+
+print("[run_task] model loaded, executing task...", flush=True)
+
+# Reuse DemoWorker's _execute logic without the thread/loop machinery.
+# We create a throwaway worker just for _execute + _record_in_docstore,
+# but we NEVER start its thread.
 from demo.worker import DemoWorker  # noqa: E402
 
 worker = DemoWorker(
     ckpt=os.environ.get("CKPTDIR", "/models"),
     jobs_dir=JOBS_DIR,
     device=os.environ.get("DEMO_DEVICE", "cuda:0"),
-    engine=os.environ.get("DEMO_ENGINE", "transformers"),
+    engine="transformers",
     dpi=int(os.environ.get("DEMO_DPI", "150")),
-    max_pixels=int(os.environ.get("DEMO_MAX_PIXELS", "2200000")),
-    idle_unload_seconds=999999,  # never idle-unload; we exit after the task
+    max_pixels=int(os.environ.get("DEMO_MAX_PIXELS", "1200000")),
+    idle_unload_seconds=999999,
     keep_loaded=True,
-    autostart=True,  # load model immediately on start
     name=f"run_task-{task_id}",
 )
-
-# Start the worker thread — it will load the model (autostart=True)
-worker.start()
-
-# Wait for model to load (up to 5 minutes for cold start)
-for attempt in range(300):
-    if worker.model_state == "loaded":
-        break
-    if worker.model_state == "error":
-        err = worker.model_error or "unknown"
-        print(f"[run_task] model load failed: {err}", flush=True)
-        db.update_task(task_id, status="error", error=err, finished_at=time.time())
-        worker.shutdown()
-        sys.exit(1)
-    time.sleep(1)
-    if attempt % 30 == 0 and attempt > 0:
-        print(f"[run_task] still loading model... ({attempt}s)", flush=True)
-
-if worker.model_state != "loaded":
-    print("[run_task] model load timeout (300s)", flush=True)
-    db.update_task(task_id, status="error", error="model load timeout", finished_at=time.time())
-    worker.shutdown()
-    sys.exit(1)
-
-print("[run_task] model loaded, executing task...", flush=True)
+# Inject our already-loaded parser so _execute uses it.
+worker.parser = parser
+worker.model_state = "loaded"
+worker._last_used = time.time()
+# Do NOT call worker.start() — we call _execute directly.
 
 try:
-    worker._run_task(task)
+    worker._execute(task)
     print(f"[run_task] task {task_id} done", flush=True)
 except Exception as error:  # noqa: BLE001
     traceback.print_exc()
     db.update_task(task_id, status="error",
                    error=f"{type(error).__name__}: {error}",
                    finished_at=time.time())
+    print(f"[run_task] task {task_id} failed: {error}", flush=True)
+    sys.exit(1)
 
-worker.shutdown(join_timeout=5)
+# Cleanup: release parser references so Python GC frees the model.
+del parser
+del worker
+try:
+    import torch
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+except ImportError:
+    pass
+
 print("[run_task] exiting — VRAM released", flush=True)
 sys.exit(0)
