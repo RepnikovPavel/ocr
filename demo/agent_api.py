@@ -35,38 +35,70 @@ from demo import db, docstore
 router = APIRouter(prefix="/api/v1", tags=["agents"])
 
 
-import itertools
 import threading
 _NUM_GPUS = int(os.environ.get("DEMO_NUM_GPUS", "1"))
-_gpu_cycle = itertools.cycle(range(_NUM_GPUS))
-_gpu_lock = threading.Lock()
+# One semaphore per GPU — ensures only one subprocess per card at a time.
+# When a task is submitted, we acquire a GPU's slot, launch the subprocess,
+# and poll for its exit in a background thread that releases the slot when done.
+_gpu_slots = [threading.Semaphore(1) for _ in range(_NUM_GPUS)]
+_gpu_assign_lock = threading.Lock()
+_gpu_next = 0  # round-robin starting point for fairness
 
 
-def _next_gpu():
-    """Thread-safe round-robin GPU selection."""
-    with _gpu_lock:
-        return str(next(_gpu_cycle))
+def _acquire_gpu():
+    """Acquire the next available GPU slot. Blocks until one is free.
+
+    Tries round-robin first (so --split 2 gets GPU0 then GPU1), then falls
+    back to whichever frees up first.
+    """
+    global _gpu_next
+    while True:
+        for offset in range(_NUM_GPUS):
+            gpu = (_gpu_next + offset) % _NUM_GPUS
+            if _gpu_slots[gpu].acquire(blocking=False):
+                with _gpu_assign_lock:
+                    _gpu_next = (gpu + 1) % _NUM_GPUS
+                return gpu
+        # All busy — wait on the one that's next in round-robin
+        gpu = _gpu_next
+        _gpu_slots[gpu].acquire()
+        with _gpu_assign_lock:
+            _gpu_next = (gpu + 1) % _NUM_GPUS
+        return gpu
+
+
+def _release_gpu(gpu_id):
+    _gpu_slots[gpu_id].release()
 
 
 def _launch_task_subprocess(task_id, device=None):
     """Spawn `python3 -m demo.run_task <task_id>` as a detached subprocess.
 
-    Each task runs in its own OS process — when the process exits, ALL GPU
-    resources are released. GPU assignment is round-robin across available
-    cards so `--split 2` naturally puts one task on GPU0 and the other on GPU1.
+    Acquires a GPU slot (one subprocess per card max), launches the task,
+    and polls for subprocess exit in a background thread. When the process
+    exits, the GPU slot is released and the next queued task can start.
     """
     import subprocess
-    gpu_id = _next_gpu()
+
+    gpu = _acquire_gpu()
     env = dict(os.environ)
-    env["CUDA_VISIBLE_DEVICES"] = gpu_id
-    env["DEMO_DEVICE"] = "cuda:0"  # inside the subprocess, the GPU is always 0
-    subprocess.Popen(
+    env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+    env["DEMO_DEVICE"] = "cuda:0"
+
+    proc = subprocess.Popen(
         [sys.executable, "-m", "demo.run_task", task_id],
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
+
+    def _wait_and_release():
+        proc.wait()
+        _release_gpu(gpu)
+
+    t = threading.Thread(target=_wait_and_release, daemon=True)
+    t.start()
 
 # Filled in by demo.server at import time: it owns the paths and the worker.
 CONTEXT = {"jobs_dir": None, "worker": None, "prompt_modes": (), "default_mode": None}

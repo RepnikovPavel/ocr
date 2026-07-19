@@ -109,11 +109,20 @@ class _StubWorker:
     short-lived subprocesses launched per task."""
     model_state = "stopped"
     model_error = None
+    paused = False
     engine = os.environ.get("DEMO_ENGINE", "transformers")
     configured_device = os.environ.get("DEMO_DEVICE", "cuda:0")
+    keep_loaded = False
+    idle_unload_seconds = 0
+    live_generation = None
+    live_page = None
     def notify_new_task(self): pass
     def cancel_task(self, task_id): pass
-    def set_keep_loaded(self, v): pass
+    def set_keep_loaded(self, v): self.keep_loaded = v
+    def request_start(self): pass  # no-op: tasks start subprocesses on demand
+    def request_stop(self): pass
+    def set_device(self, d): self.configured_device = d
+    def live_generation(self): return None
     def is_alive(self): return True
     def start(self): pass
     def shutdown(self, *a, **kw): pass
@@ -404,7 +413,9 @@ def api_create_task(
         "max_new_tokens": max_new_tokens,
     }
     task_id = db.create_task(request.state.sid, job_id, prompt_mode, page_list, params)
-    WORKER.notify_new_task()
+    # Launch a subprocess for this task (same as the agent API path)
+    from demo.agent_api import _launch_task_subprocess
+    _launch_task_subprocess(task_id)
     return {"task_id": task_id, "status": "queued"}
 
 
