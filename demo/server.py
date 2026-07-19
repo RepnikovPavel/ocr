@@ -99,41 +99,47 @@ db.init_db(STATE_DIR / "demo.db")
 docstore.init(STATE_DIR / "demo.db")
 
 def _build_workers():
-    """Construct one DemoWorker per vLLM endpoint (= one per GPU).
+    """Construct DemoWorker(s) based on engine and device configuration.
 
-    DEMO_VLLM_URLS is a comma-separated list of vLLM endpoints. Each worker
-    owns one endpoint and one Docker container name (for stop/start on idle).
-    When only one URL is given, falls back to a single worker — the
-    pre-multi-GPU behaviour.
+    For the in-process transformers engine, each worker loads the model
+    directly via DotsMOCRParser on its own GPU. Set DEMO_DEVICES=cuda:0,cuda:1
+    to spawn one worker per GPU; the shared SQLite queue dispatches tasks
+    atomically. Idle-unload (del parser + torch.cuda.empty_cache) frees
+    ALL model weights — no parasitic VRAM load between tasks.
+
+    For vLLM, each worker points at one vLLM endpoint via DEMO_VLLM_URLS.
     """
-    urls_raw = os.environ.get("DEMO_VLLM_URLS") or os.environ.get("DEMO_VLLM_URL") or ""
-    urls = [u.strip() for u in urls_raw.split(",") if u.strip()]
-    # Container names for stop/start: comma-separated in DEMO_VLLM_CONTAINERS,
-    # or derived from DEMO_VLLM_CONTAINER (single, used for all — wrong for multi).
-    containers_raw = os.environ.get("DEMO_VLLM_CONTAINERS") or ""
-    containers = [c.strip() for c in containers_raw.split(",") if c.strip()]
+    engine = os.environ.get("DEMO_ENGINE", "vllm")
     common = dict(
         ckpt=CKPTDIR, jobs_dir=JOBS_DIR,
-        device=os.environ.get("DEMO_DEVICE", "auto"),
         dpi=INFER_DPI, max_pixels=MAX_PIXELS,
         autostart=os.environ.get("DEMO_AUTOSTART", "0") == "1",
         keep_loaded=os.environ.get("DEMO_KEEP_LOADED", "0") == "1",
         idle_unload_seconds=int(os.environ.get("DEMO_IDLE_UNLOAD_S", "10")),
         attn_implementation=os.environ.get("DEMO_ATTN_IMPLEMENTATION") or None,
-        engine=os.environ.get("DEMO_ENGINE", "vllm"),
+        engine=engine,
         vllm_model=os.environ.get("DEMO_VLLM_MODEL"),
     )
+
+    # --- transformers engine: one worker per GPU ---
+    if engine == "transformers":
+        devices_raw = os.environ.get("DEMO_DEVICES") or os.environ.get("DEMO_DEVICE", "auto")
+        devices = [d.strip() for d in devices_raw.split(",") if d.strip()]
+        return [
+            DemoWorker(device=dev, name=f"worker-{i}", **common)
+            for i, dev in enumerate(devices)
+        ]
+
+    # --- vLLM engine: one worker per endpoint ---
+    urls_raw = os.environ.get("DEMO_VLLM_URLS") or os.environ.get("DEMO_VLLM_URL") or ""
+    urls = [u.strip() for u in urls_raw.split(",") if u.strip()]
+    device = os.environ.get("DEMO_DEVICE", "auto")
     if not urls:
-        return [DemoWorker(vllm_url=None, name="worker-0", **common)]
-    workers = []
-    for i, url in enumerate(urls):
-        w = DemoWorker(
-            vllm_url=url,
-            name=f"worker-{i}",
-            **common,
-        )
-        workers.append(w)
-    return workers
+        return [DemoWorker(device=device, vllm_url=None, name="worker-0", **common)]
+    return [
+        DemoWorker(device=device, vllm_url=url, name=f"worker-{i}", **common)
+        for i, url in enumerate(urls)
+    ]
 
 
 class MultiWorker:
