@@ -98,131 +98,48 @@ db.init_db(STATE_DIR / "demo.db")
 # the document store shares the file: one database to deploy and back up
 docstore.init(STATE_DIR / "demo.db")
 
-def _build_workers():
-    """Construct DemoWorker(s) based on engine and device configuration.
+# No in-process worker. Each task runs as a separate subprocess
+# (demo.run_task), which loads the model, parses, writes results,
+# and exits — releasing ALL VRAM on process death. Zero parasitic load.
+# agent_api._launch_task_subprocess handles the Popen().
 
-    For the in-process transformers engine, each worker loads the model
-    directly via DotsMOCRParser on its own GPU. Set DEMO_DEVICES=cuda:0,cuda:1
-    to spawn one worker per GPU; the shared SQLite queue dispatches tasks
-    atomically. Idle-unload (del parser + torch.cuda.empty_cache) frees
-    ALL model weights — no parasitic VRAM load between tasks.
-
-    For vLLM, each worker points at one vLLM endpoint via DEMO_VLLM_URLS.
-    """
-    engine = os.environ.get("DEMO_ENGINE", "vllm")
-    common = dict(
-        ckpt=CKPTDIR, jobs_dir=JOBS_DIR,
-        dpi=INFER_DPI, max_pixels=MAX_PIXELS,
-        autostart=os.environ.get("DEMO_AUTOSTART", "0") == "1",
-        keep_loaded=os.environ.get("DEMO_KEEP_LOADED", "0") == "1",
-        idle_unload_seconds=int(os.environ.get("DEMO_IDLE_UNLOAD_S", "10")),
-        attn_implementation=os.environ.get("DEMO_ATTN_IMPLEMENTATION") or None,
-        engine=engine,
-        vllm_model=os.environ.get("DEMO_VLLM_MODEL"),
-    )
-
-    # --- transformers engine: one worker per GPU ---
-    if engine == "transformers":
-        devices_raw = os.environ.get("DEMO_DEVICES") or os.environ.get("DEMO_DEVICE", "auto")
-        devices = [d.strip() for d in devices_raw.split(",") if d.strip()]
-        return [
-            DemoWorker(device=dev, name=f"worker-{i}", **common)
-            for i, dev in enumerate(devices)
-        ]
-
-    # --- vLLM engine: one worker per endpoint ---
-    urls_raw = os.environ.get("DEMO_VLLM_URLS") or os.environ.get("DEMO_VLLM_URL") or ""
-    urls = [u.strip() for u in urls_raw.split(",") if u.strip()]
-    device = os.environ.get("DEMO_DEVICE", "auto")
-    if not urls:
-        return [DemoWorker(device=device, vllm_url=None, name="worker-0", **common)]
-    return [
-        DemoWorker(device=device, vllm_url=url, name=f"worker-{i}", **common)
-        for i, url in enumerate(urls)
-    ]
-
-
-class MultiWorker:
-    """Drop-in wrapper that routes calls to N underlying DemoWorker instances."""
-
-    def __init__(self, workers):
-        self.workers = list(workers)
-
-    def notify_new_task(self):
-        for w in self.workers:
-            try: w.notify_new_task()
-            except Exception: traceback.print_exc()
-
-    def cancel_task(self, task_id):
-        for w in self.workers:
-            try: w.cancel_task(task_id)
-            except Exception: traceback.print_exc()
-
-    def set_keep_loaded(self, value):
-        for w in self.workers:
-            try: w.set_keep_loaded(value)
-            except Exception: traceback.print_exc()
-
+class _StubWorker:
+    """Minimal stub so agent_api.configure(JOBS_DIR, WORKER, ...) works.
+    The server process never loads the model; all inference happens in
+    short-lived subprocesses launched per task."""
+    model_state = "stopped"
+    model_error = None
+    engine = os.environ.get("DEMO_ENGINE", "transformers")
+    configured_device = os.environ.get("DEMO_DEVICE", "cuda:0")
+    def notify_new_task(self): pass
+    def cancel_task(self, task_id): pass
+    def set_keep_loaded(self, v): pass
+    def is_alive(self): return True
+    def start(self): pass
+    def shutdown(self, *a, **kw): pass
     def status(self):
-        if len(self.workers) == 1:
-            return self.workers[0].status()
-        base = dict(self.workers[0].status())
-        any_loaded = any(w.model_state == "loaded" for w in self.workers)
-        base["model_state"] = "loaded" if any_loaded else base.get("model_state")
-        base["num_workers"] = len(self.workers)
-        base["workers"] = [w.status() for w in self.workers]
-        return base
+        return {
+            "model_state": "stopped",
+            "model_error": None,
+            "paused": False,
+            "keep_loaded": False,
+            "idle_unload_seconds": 0,
+            "unload_in_seconds": None,
+            "current_task_id": None,
+            "device": None,
+            "configured_device": self.configured_device,
+            "engine": self.engine,
+            "attn_implementation": None,
+            "live": None,
+        }
 
-    def is_alive(self):
-        return any(w.is_alive() for w in self.workers)
-
-    def start(self):
-        for w in self.workers:
-            if not w.is_alive():
-                w.start()
-
-    def shutdown(self, *a, **kw):
-        for w in self.workers:
-            try: w.shutdown(*a, **kw)
-            except Exception: traceback.print_exc()
-
-
-_sub_workers = _build_workers()
-WORKER = MultiWorker(_sub_workers) if len(_sub_workers) > 1 else _sub_workers[0]
+WORKER = _StubWorker()
 
 app = FastAPI(title=VARIANTS[VARIANT]["title"])
 
 agent_api.configure(JOBS_DIR, WORKER, VARIANTS[VARIANT]["prompt_modes"],
                     VARIANTS[VARIANT]["default_mode"])
 app.include_router(agent_api.router)
-
-
-# Start the worker eagerly at import time. The FastAPI @app.on_event("startup")
-# hook used to do this, but on some container restarts the hook didn't fire
-# (the worker thread never appeared, requests returned cached answers but new
-# parses hung forever). Eager start is safe — DemoWorker is a daemon thread
-# that does nothing until a task is queued, so starting it before uvicorn
-# accepts connections is harmless and guarantees it exists.
-import os as _os
-if not WORKER.is_alive() and _os.environ.get("DEMO_SKIP_EAGER_WORKER") != "1":
-    try:
-        WORKER.start()
-        print(f"[server] eager worker start: is_alive={WORKER.is_alive()}",
-              flush=True)
-    except RuntimeError as _e:
-        print(f"[server] eager worker start FAILED: {_e}", flush=True)
-
-
-@app.on_event("startup")
-def _start_worker():
-    # belt-and-suspenders: if the eager start above somehow didn't happen
-    # (e.g. uvicorn --reload re-imported the module), the startup event
-    # still gets a chance to bring the worker up.
-    if not WORKER.is_alive():
-        try:
-            WORKER.start()
-        except RuntimeError:
-            pass
 
 
 @app.middleware("http")

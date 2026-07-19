@@ -19,7 +19,9 @@ Routes (all under /api/v1):
 import asyncio
 import io
 import json
+import os
 import shutil
+import sys
 import time
 import uuid
 import zipfile
@@ -31,6 +33,34 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from demo import db, docstore
 
 router = APIRouter(prefix="/api/v1", tags=["agents"])
+
+
+import itertools
+_gpu_cycle = itertools.cycle(range(int(os.environ.get("DEMO_NUM_GPUS", "1"))))
+
+
+def _launch_task_subprocess(task_id, device=None):
+    """Spawn `python3 -m demo.run_task <task_id>` as a detached subprocess.
+
+    Each task runs in its own OS process — when the process exits, ALL GPU
+    resources are released. GPU assignment is round-robin across available
+    cards so `--split 2` naturally puts one task on GPU0 and the other on GPU1.
+    """
+    import subprocess
+    # Round-robin GPU selection: first task → GPU0, second → GPU1, etc.
+    # This is what makes --split 2 work: the client sends two POSTs in quick
+    # succession; each gets the next GPU in the cycle.
+    gpu_id = str(next(_gpu_cycle))
+    env = dict(os.environ)
+    env["CUDA_VISIBLE_DEVICES"] = gpu_id
+    env["DEMO_DEVICE"] = "cuda:0"  # inside the subprocess, the GPU is always 0
+    subprocess.Popen(
+        [sys.executable, "-m", "demo.run_task", task_id],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
 
 # Filled in by demo.server at import time: it owns the paths and the worker.
 CONTEXT = {"jobs_dir": None, "worker": None, "prompt_modes": (), "default_mode": None}
@@ -146,7 +176,13 @@ def submit_document(
                   "custom_prompt": None, "bbox": None, "bbox_view_size": None,
                   "max_new_tokens": None}
         task_id = db.create_task(request.state.sid, job_id, mode, page_list, params)
-        CONTEXT["worker"].notify_new_task()
+
+        # Launch a subprocess to parse this task. Each task = one process =
+        # one model load + parse + process exit. Process death releases ALL
+        # VRAM — zero parasitic load between tasks. For --split 2 the client
+        # sends two POSTs, each spawning its own subprocess on a different GPU.
+        _launch_task_subprocess(task_id)
+
         queue = db.list_active_tasks(limit=100)
         position = next((i for i, t in enumerate(queue) if t["id"] == task_id), 0)
         return {
