@@ -184,19 +184,43 @@ def _task_for(sha256, mode):
 # ---------------------------------------------------------------- bundle
 
 @router.get("/documents/{sha256}/bundle")
-def document_bundle(sha256: str, prompt_mode: str = None):
+def document_bundle(sha256: str, prompt_mode: str = None, pages: str = None):
     """The whole result as one ZIP: markdown plus the images it references.
 
     Agents get a single artifact they can unpack and read, with the relative
     image links in the markdown already resolving inside the archive — the same
     layout the UI renders, without walking a directory of URLs.
+
+    The `pages` query param fixes which cached parse to serve when a document
+    has been parsed at several page selections (e.g. once for `--pages 0` and
+    once for the full document). Without it we serve the most complete parse
+    available (most pages_done), NOT the most recent — a small later parse
+    must not shadow a fuller earlier one.
     """
     mode = prompt_mode or CONTEXT["default_mode"]
-    task = _task_for(sha256, mode)
-    result = (docstore.find_result(sha256, mode, task["pages"]) if task
-              else docstore.find_latest_result(sha256, mode))
+    # Explicit `?pages=` → look up exactly that page selection's result.
+    if pages is not None and pages.strip() not in ("", "all"):
+        try:
+            page_list = sorted({int(x) for x in pages.split(",") if x.strip() != ""})
+        except ValueError:
+            raise HTTPException(400, f"bad pages: {pages}")
+        explicit = docstore.find_result(sha256, mode, page_list)
+        if explicit is not None:
+            result = explicit
+        else:
+            # Requested selection was never parsed → fall through to fullest.
+            result = docstore.find_fullest_result(sha256, mode)
+    else:
+        # No explicit selection → serve the most complete parse available.
+        # NOTE: we intentionally do NOT consult `_task_for()` here. An active
+        # task's `pages` field is just whichever slice was queued most recently,
+        # which is exactly how a 3-page run came to shadow a fuller 58-page
+        # parse in the bundle output. The bundle endpoint is about retrieving
+        # the document, not about the queue, so default to fullest.
+        result = docstore.find_fullest_result(sha256, mode)
     if result is None:
-        # the caller may mean an older page selection; serve the newest parse
+        # Last-resort fallback: any parse, newest first, so we never 404 when
+        # a result exists somewhere.
         result = docstore.find_latest_result(sha256, mode)
     if result is None:
         raise HTTPException(404, "no parsed result for this document and prompt mode")
