@@ -177,6 +177,44 @@ def has_queued_tasks():
         return row is not None
 
 
+def find_active_task_by_doc(sha256, prompt_mode, pages_json):
+    """Return an already-running (or queued) task for this doc+mode+pages.
+
+    Used by the submit endpoint to avoid re-dispatching work that is already
+    in flight. When a user re-runs `ocrc parse` against the same document
+    while a previous run is still parsing, this returns the active task so
+    the client can simply wait for it instead of creating a duplicate.
+
+    pages_json is the JSON-encoded page list (matches the `pages` column
+    format written by create_task). Comparison is on the canonical string,
+    not the parsed list, so [0,1,2] and [2,1,0] correctly don't match.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM tasks "
+            "WHERE status IN ('queued','running') "
+            "  AND prompt_mode=? AND pages=? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (prompt_mode, pages_json),
+        ).fetchall()
+        # Filter further by sha256 inside params JSON — SQLite has no
+        # portable JSON containment, so do it in Python. params is a
+        # dict that carries {"sha256": "...", ...} for agent API tasks.
+        import json as _json
+        for row in rows:
+            try:
+                params = _json.loads(row["params"]) if row["params"] else {}
+            except (ValueError, TypeError):
+                params = {}
+            if params.get("sha256") == sha256:
+                # serialise the row the way get_task does
+                d = dict(row)
+                d["params"] = params
+                d["pages"] = _json.loads(d["pages"]) if d["pages"] else []
+                return d
+        return None
+
+
 def claim_next_task():
     """Atomically move the oldest queued task to running; None if empty."""
     with _connect() as conn:
