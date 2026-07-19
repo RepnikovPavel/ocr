@@ -534,6 +534,22 @@ class DemoWorker(threading.Thread):
         except Exception as error:
             print(f"[worker] wake_up failed: {error}", flush=True)
 
+
+    def _ensure_vllm_awake(self):
+        """No-op when sleep-mode is disabled; wakes vLLM if it supports it."""
+        if self.parser is None:
+            return
+        is_sleeping = getattr(self.parser, "is_sleeping", None)
+        wake = getattr(self.parser, "wake", None)
+        if is_sleeping is None or wake is None:
+            return
+        try:
+            if not is_sleeping():
+                return
+            wake()
+        except Exception:
+            pass
+
     def _run_task(self, task):
         self.current_task_id = task["id"]
         self.abort_event.clear()
