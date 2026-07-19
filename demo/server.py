@@ -98,112 +98,26 @@ db.init_db(STATE_DIR / "demo.db")
 # the document store shares the file: one database to deploy and back up
 docstore.init(STATE_DIR / "demo.db")
 
-def _build_workers():
-    """Construct one DemoWorker per vLLM endpoint.
-
-    Each worker owns one vLLM server (= one GPU). When several documents are
-    queued at once they fan out across workers and parse in parallel; one
-    multi-page document parses on one worker, sequentially. For a speedup
-    on a single document the client splits it into several tasks that cover
-    different page ranges (see `ocrc` parallel-split mode).
-    """
-    urls_raw = os.environ.get("DEMO_VLLM_URLS") or os.environ.get("DEMO_VLLM_URL") or ""
-    urls = [u.strip() for u in urls_raw.split(",") if u.strip()]
-    if not urls:
-        return [DemoWorker(
-            ckpt=CKPTDIR, jobs_dir=JOBS_DIR,
-            device=os.environ.get("DEMO_DEVICE", "auto"),
-            dpi=INFER_DPI, max_pixels=MAX_PIXELS,
-            autostart=os.environ.get("DEMO_AUTOSTART", "0") == "1",
-            keep_loaded=os.environ.get("DEMO_KEEP_LOADED", "0") == "1",
-            idle_unload_seconds=int(os.environ.get("DEMO_IDLE_UNLOAD_S", "180")),
-            attn_implementation=os.environ.get("DEMO_ATTN_IMPLEMENTATION") or None,
-            engine=os.environ.get("DEMO_ENGINE", "vllm"),
-            vllm_url=None,
-            vllm_model=os.environ.get("DEMO_VLLM_MODEL"),
-        )]
-    return [
-        DemoWorker(
-            ckpt=CKPTDIR, jobs_dir=JOBS_DIR,
-            device=os.environ.get("DEMO_DEVICE", "auto"),
-            dpi=INFER_DPI, max_pixels=MAX_PIXELS,
-            autostart=os.environ.get("DEMO_AUTOSTART", "0") == "1",
-            keep_loaded=os.environ.get("DEMO_KEEP_LOADED", "0") == "1",
-            idle_unload_seconds=int(os.environ.get("DEMO_IDLE_UNLOAD_S", "180")),
-            attn_implementation=os.environ.get("DEMO_ATTN_IMPLEMENTATION") or None,
-            engine=os.environ.get("DEMO_ENGINE", "vllm"),
-            vllm_url=url,
-            vllm_model=os.environ.get("DEMO_VLLM_MODEL"),
-            name=f"worker-{i}",
-        )
-        for i, url in enumerate(urls)
-    ]
-
-
-class MultiWorker:
-    """Fan-out wrapper that exposes the same surface agent_api expects from a
-    single DemoWorker (notify_new_task, status, set_keep_loaded, cancel_task,
-    shutdown) but routes to N underlying workers — one per vLLM endpoint.
-
-    The shared SQLite queue is the scheduler: every worker claims its own
-    task atomically (db.claim_next_task uses UPDATE … WHERE status='queued'
-    and checks rowcount=1), so this object does no dispatch on its own. Its
-    only job is to be a drop-in so demo.server / agent_api do not have to
-    know whether one GPU or several is doing the work.
-    """
-
-    def __init__(self, workers):
-        self.workers = list(workers)
-
-    def notify_new_task(self):
-        for w in self.workers:
-            try:
-                w.notify_new_task()
-            except Exception:  # noqa: BLE001
-                import traceback; traceback.print_exc()
-
-    def cancel_task(self, task_id):
-        for w in self.workers:
-            try:
-                w.cancel_task(task_id)
-            except Exception:  # noqa: BLE001
-                import traceback; traceback.print_exc()
-
-    def set_keep_loaded(self, value):
-        for w in self.workers:
-            try:
-                w.set_keep_loaded(value)
-            except Exception:  # noqa: BLE001
-                import traceback; traceback.print_exc()
-
-    def status(self):
-        if len(self.workers) == 1:
-            return self.workers[0].status()
-        # Multi-worker fallback (legacy path). Report the first worker's
-        # status augmented with a 'workers' list for visibility.
-        base = dict(self.workers[0].status())
-        base["num_workers"] = len(self.workers)
-        base["workers"] = [w.status() for w in self.workers]
-        return base
-
-    def is_alive(self):
-        return any(w.is_alive() for w in self.workers)
-
-    def start(self):
-        for w in self.workers:
-            if not w.is_alive():
-                w.start()
-
-    def shutdown(self, *args, **kwargs):
-        for w in self.workers:
-            try:
-                w.shutdown(*args, **kwargs)
-            except Exception:  # noqa: BLE001
-                import traceback; traceback.print_exc()
-
-
-_SUB_WORKERS = _build_workers()
-WORKER = MultiWorker(_SUB_WORKERS) if len(_SUB_WORKERS) > 1 else _SUB_WORKERS[0]
+WORKER = DemoWorker(
+    ckpt=CKPTDIR,
+    jobs_dir=JOBS_DIR,
+    device=os.environ.get("DEMO_DEVICE", "auto"),
+    dpi=INFER_DPI,
+    max_pixels=MAX_PIXELS,
+    # lazy by default: the GPU stays free until a task arrives
+    autostart=os.environ.get("DEMO_AUTOSTART", "0") == "1",
+    keep_loaded=os.environ.get("DEMO_KEEP_LOADED", "0") == "1",
+    idle_unload_seconds=int(os.environ.get("DEMO_IDLE_UNLOAD_S", "180")),
+    # empty => DotsMOCRParser's own default (flex_attention)
+    attn_implementation=os.environ.get("DEMO_ATTN_IMPLEMENTATION") or None,
+    # vLLM by default: measured 1.85x faster end to end on the same card with the
+    # same answers (reports/perf-findings.md §5). It needs a server to be running —
+    # scripts/run_local_vllm.sh starts both; scripts/run_local.sh selects the
+    # in-process engine for when there is none.
+    engine=os.environ.get("DEMO_ENGINE", "vllm"),
+    vllm_url=os.environ.get("DEMO_VLLM_URL"),
+    vllm_model=os.environ.get("DEMO_VLLM_MODEL"),
+)
 
 app = FastAPI(title=VARIANTS[VARIANT]["title"])
 
@@ -212,10 +126,32 @@ agent_api.configure(JOBS_DIR, WORKER, VARIANTS[VARIANT]["prompt_modes"],
 app.include_router(agent_api.router)
 
 
+# Start the worker eagerly at import time. The FastAPI @app.on_event("startup")
+# hook used to do this, but on some container restarts the hook didn't fire
+# (the worker thread never appeared, requests returned cached answers but new
+# parses hung forever). Eager start is safe — DemoWorker is a daemon thread
+# that does nothing until a task is queued, so starting it before uvicorn
+# accepts connections is harmless and guarantees it exists.
+import os as _os
+if not WORKER.is_alive() and _os.environ.get("DEMO_SKIP_EAGER_WORKER") != "1":
+    try:
+        WORKER.start()
+        print(f"[server] eager worker start: is_alive={WORKER.is_alive()} "
+              f"ident={WORKER.ident}", flush=True)
+    except RuntimeError as _e:
+        print(f"[server] eager worker start FAILED: {_e}", flush=True)
+
+
 @app.on_event("startup")
 def _start_worker():
+    # belt-and-suspenders: if the eager start above somehow didn't happen
+    # (e.g. uvicorn --reload re-imported the module), the startup event
+    # still gets a chance to bring the worker up.
     if not WORKER.is_alive():
-        WORKER.start()
+        try:
+            WORKER.start()
+        except RuntimeError:
+            pass
 
 
 @app.middleware("http")
