@@ -110,6 +110,32 @@ def submit_document(
                 "bundle_url": f"/api/v1/documents/{sha256}/bundle?prompt_mode={mode}",
             }
 
+        # Already in flight? An active task for the same sha+mode+page
+        # selection means the server is already parsing this exact request —
+        # re-running `ocrc parse` against the same PDF should hand the caller
+        # the in-progress task_id (so it can wait_for the same answer) rather
+        # than queue a duplicate task that will do the whole parse again.
+        # The cancelled status is excluded deliberately: a user who aborted
+        # a previous run and re-submits does want a fresh parse.
+        import json as _json
+        pages_json = _json.dumps(page_list)
+        active = db.find_active_task_by_doc(sha256, mode, pages_json)
+        if active is not None:
+            queue = db.list_active_tasks(limit=100)
+            position = next(
+                (i for i, t in enumerate(queue) if t["id"] == active["id"]), 0)
+            return {
+                "sha256": sha256,
+                "status": "in_progress",
+                "prompt_mode": mode,
+                "pages": page_list,
+                "num_pages": num_pages,
+                "task_id": active["id"],
+                "queue_position": position,
+                "queue_length": len(queue),
+                "bundle_url": f"/api/v1/documents/{sha256}/bundle?prompt_mode={mode}",
+            }
+
         job_id = db.create_job(request.state.sid, file.filename or stored.name,
                                kind, num_pages)
         job_dir = jobs_dir / job_id
