@@ -84,13 +84,8 @@ class DemoWorker(threading.Thread):
                  max_pixels=2_200_000, max_completion_tokens=16384,
                  parser_factory=None, autostart=False, keep_loaded=False,
                  idle_unload_seconds=180, attn_implementation=None,
-                 engine="transformers", vllm_url=None, vllm_model=None,
-                 name=None):
-        # `name` propagates to threading.Thread so multi-worker processes
-        # show distinct names in logs / py-spy. Default keeps the historical
-        # name for single-worker processes.
-        super().__init__(daemon=True, name=name or "demo-worker")
-        self.name = name or "demo-worker"
+                 engine="transformers", vllm_url=None, vllm_model=None):
+        super().__init__(daemon=True, name="demo-worker")
         self.ckpt = ckpt
         self.jobs_dir = Path(jobs_dir)
         self.device = device
@@ -372,6 +367,33 @@ class DemoWorker(threading.Thread):
 
     # ------------------------------------------------------------ task
 
+    def _ensure_vllm_awake(self):
+        """Wake vLLM if it's sleeping, blocking until the weights are resident.
+
+        Cheap when vLLM is already awake (one short GET /is_sleeping → false,
+        return immediately). Expensive but unavoidable when it's asleep:
+        POST /wake_up blocks until vLLM has reloaded the weights into VRAM,
+        which is exactly the latency we'd otherwise impose on the first page
+        of the task as a confusing hang.
+        """
+        if self.parser is None:
+            return
+        is_sleeping = getattr(self.parser, "is_sleeping", None)
+        wake = getattr(self.parser, "wake", None)
+        if is_sleeping is None or wake is None:
+            return  # in-process transformers engine — no concept of sleep
+        try:
+            if not is_sleeping():
+                return
+        except Exception:  # noqa: BLE001 — assume awake on error
+            return
+        try:
+            wake()
+        except Exception as error:  # noqa: BLE001 — log, don't crash the task
+            traceback.print_exc()
+            print(f"[worker] wake_up failed: {type(error).__name__}: {error}",
+                  flush=True)
+
     def _run_task(self, task):
         self.current_task_id = task["id"]
         self.abort_event.clear()
@@ -381,6 +403,19 @@ class DemoWorker(threading.Thread):
             self.current_task_id = None
             db.update_task(task["id"], status="queued", started_at=None)
             return
+        # Belt-and-suspenders wake-up. The run loop normally re-loads the
+        # model (which calls parser.wake()) when it sees `model_state in
+        # ("stopped","error")`. But two edge cases bypass that:
+        #   1) an external script / docker restart put vLLM to sleep while
+        #      the demo kept `model_state="loaded"`;
+        #   2) the previous idle-unload's `sleep()` call returned before the
+        #      offload was complete, and the demo's `model_state="stopped"`
+        #      was set optimistically.
+        # In both, the first request would hang for tens of seconds waiting
+        # for vLLM to reload the weights on demand. Asking `is_sleeping()`
+        # and explicitly waking here makes the latency the demo's problem to
+        # report, not the user's to wonder about.
+        self._ensure_vllm_awake()
         try:
             self._execute(task)
         except Exception as error:
