@@ -139,3 +139,30 @@ def test_search_absent_still_empty_with_fallback(store):
     """LIKE fallback must not invent matches: absent terms stay absent."""
     add(store, markdown="nothing relevant here")
     assert store.search("квазипериодический") == []
+
+
+def test_find_fullest_result_picks_most_complete_not_most_recent(store):
+    """The default bundle for a document parsed at several page selections
+    must be the one with the most pages_done, not the one that finished last.
+    Regression for `ocrc parse URL > out.zip` returning a 3-page slice after
+    a fuller 58-page parse had also been done: the 3-page run landed later
+    and find_latest_result (ORDER BY created_at DESC) shadowed it.
+    """
+    sha = "d" * 64
+    store.remember_document(sha, "paper.pdf", "pdf", 10, 1000)
+    # First: a big parse covering 8 pages.
+    store.store_result(sha256=sha, prompt_mode="prompt_layout_all_en",
+                       pages=list(range(8)), task_id="t-big", job_id="j-big",
+                       markdown="full parse", pages_done=8, generated_tokens=1000,
+                       seconds=100, filename="paper.pdf")
+    # Later: a tiny 1-page parse that lands AFTER the big one.
+    store.store_result(sha256=sha, prompt_mode="prompt_layout_all_en",
+                       pages=[3], task_id="t-small", job_id="j-small",
+                       markdown="one page only", pages_done=1, generated_tokens=10,
+                       seconds=2, filename="paper.pdf")
+
+    latest = store.find_latest_result(sha, "prompt_layout_all_en")
+    fullest = store.find_fullest_result(sha, "prompt_layout_all_en")
+    assert latest["task_id"] == "t-small", "latest by created_at is the small one"
+    assert fullest["task_id"] == "t-big", "fullest must beat recent-but-small"
+    assert fullest["pages_done"] == 8

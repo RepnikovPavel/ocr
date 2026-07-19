@@ -142,6 +142,26 @@ def find_latest_result(sha256, prompt_mode):
         return dict(row) if row else None
 
 
+def find_fullest_result(sha256, prompt_mode):
+    """The parse covering the most pages for this document + prompt.
+
+    The bundle endpoint needs to default to something when the caller didn't
+    say which page selection it wants. Ordering by `created_at DESC` (the old
+    behaviour via find_latest_result) returned whatever was parsed most
+    recently — a 3-page run that landed after a full 58-page parse would
+    shadow the full one, and the user got back a fraction of the document.
+    Ordering by `pages_done DESC` makes the default "the most complete
+    parse available", which matches what users (and `ocrc parse URL` with
+    no --pages) actually expect.
+    """
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM document_results WHERE sha256=? AND prompt_mode=? "
+            "ORDER BY pages_done DESC, created_at DESC LIMIT 1",
+            (sha256, prompt_mode)).fetchone()
+        return dict(row) if row else None
+
+
 def store_result(sha256, prompt_mode, pages, task_id, job_id, markdown,
                  pages_done, generated_tokens=0, seconds=0.0, filename=""):
     key = pages_key(pages)
