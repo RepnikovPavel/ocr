@@ -10,6 +10,7 @@ Model lifecycle (lazy by default):
     DotsMOCRParser.abort_event; finished pages keep their results.
 """
 
+import os
 import threading
 import time
 import traceback
@@ -264,6 +265,10 @@ class DemoWorker(threading.Thread):
     def _load_model(self):
         self.model_state = "loading"
         self.model_error = None
+        # If we stopped the vLLM container on the previous idle-unload (the only
+        # way to free ALL VRAM, not just the weights), start it back and wait
+        # for /health before trying to use the parser.
+        self._start_vllm_container()
         # A parser that is merely asleep only needs waking; rebuilding the client
         # would leave the weights offloaded and the card still empty.
         wake = getattr(self.parser, "wake", None) if self.parser is not None else None
@@ -291,6 +296,106 @@ class DemoWorker(threading.Thread):
             self.paused = True
             traceback.print_exc()
 
+    # ------------------------------------------------------------ vllm container
+
+    _DOCKER_SOCKET = "/var/run/docker.sock"
+    _VLLM_CONTAINER = os.environ.get("DEMO_VLLM_CONTAINER")  # e.g. "dots_vllm"
+
+    @classmethod
+    def _docker_api(cls, method, path, body=None):
+        """Call the Docker Engine API over the unix socket. Returns (status, json).
+
+        Used to start/stop the vLLM container from inside the demo process so
+        that idle-unload frees ALL VRAM (stopping the process, not just
+        offloading weights). Requires /var/run/docker.sock to be bind-mounted
+        into the demo container. When the socket is absent (local dev without
+        Docker), every call no-ops and returns (0, None).
+        """
+        import socket as _socket
+        if not cls._VLLM_CONTAINER:
+            return 0, None
+        sock_path = cls._DOCKER_SOCKET
+        if not os.path.exists(sock_path):
+            return 0, None
+        try:
+            s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+            s.settimeout(120)
+            s.connect(sock_path)
+            body_bytes = body.encode() if body else b""
+            headers = (
+                f"{method} {path} HTTP/1.0\r\n"
+                f"Host: docker\r\n"
+                f"Content-Type: application/json\r\n"
+                f"Content-Length: {len(body_bytes)}\r\n"
+                "\r\n"
+            ).encode()
+            s.sendall(headers + body_bytes)
+            raw = b""
+            while True:
+                chunk = s.recv(65536)
+                if not chunk:
+                    break
+                raw += chunk
+            s.close()
+            status_line = raw.split(b"\r\n", 1)[0].decode(errors="replace")
+            status_code = int(status_line.split()[1]) if " " in status_line else 0
+            # body is after the blank line separating headers from body
+            parts = raw.split(b"\r\n\r\n", 1)
+            resp_body = parts[1] if len(parts) > 1 else b""
+            return status_code, resp_body
+        except Exception as error:  # noqa: BLE001
+            print(f"[worker] docker API {method} {path} failed: {error}", flush=True)
+            return 0, None
+
+    def _stop_vllm_container(self):
+        """Stop the vLLM Docker container to free ALL VRAM (not just weights)."""
+        if not self._VLLM_CONTAINER:
+            return
+        status, _ = self._docker_api("POST", f"/containers/{self._VLLM_CONTAINER}/stop?t=5")
+        if status in (204, 304):
+            print(f"[worker] stopped vLLM container '{self._VLLM_CONTAINER}' — "
+                  f"VRAM fully freed", flush=True)
+        elif status == 0:
+            pass  # no Docker socket — silent no-op
+        else:
+            print(f"[worker] stop vLLM container returned {status}", flush=True)
+
+    def _start_vllm_container(self):
+        """Start the vLLM Docker container and block until /health is 200."""
+        if not self._VLLM_CONTAINER:
+            return
+        # Check if already running
+        status, body = self._docker_api(
+            "GET", f"/containers/{self._VLLM_CONTAINER}/json")
+        if status == 200:
+            import json as _json
+            try:
+                info = _json.loads(body)
+                running = info.get("State", {}).get("Running", False)
+            except Exception:  # noqa: BLE001
+                running = False
+            if running:
+                return  # already up, nothing to do
+        # Start it
+        print(f"[worker] starting vLLM container '{self._VLLM_CONTAINER}'...",
+              flush=True)
+        self._docker_api("POST", f"/containers/{self._VLLM_CONTAINER}/start")
+        # Wait for /health to respond (vLLM takes 10-30s to load weights)
+        import urllib.request as _url
+        health_url = self.vllm_url.replace("/v1", "") + "/health"
+        for attempt in range(60):
+            try:
+                with _url.urlopen(health_url, timeout=3) as r:
+                    if r.status == 200:
+                        print(f"[worker] vLLM container healthy after "
+                              f"{attempt + 1} polls", flush=True)
+                        return
+            except Exception:
+                pass
+            time.sleep(2)
+        print(f"[worker] WARNING: vLLM container did not become healthy "
+              f"after 120s", flush=True)
+
     def _unload_model(self):
         # Gate on the capability, not on the engine name: a parser that can offload
         # its own weights is the thing that makes "unload" mean something here.
@@ -300,11 +405,13 @@ class DemoWorker(threading.Thread):
         if sleep is not None:
             try:
                 sleep()
-                self.model_state = "stopped"
-            except Exception as error:  # noqa: BLE001 - report, do not pretend
-                self.model_state = "error"
-                self.model_error = f"{type(error).__name__}: {error}"
-                traceback.print_exc()
+            except Exception:
+                pass  # best-effort; container stop below is the real unload
+            # If we know the vLLM Docker container name, stop it outright.
+            # Sleep-mode alone leaves ~700 MiB of CUDA context / runtime
+            # resident; stopping the container frees ALL VRAM back to the OS.
+            self._stop_vllm_container()
+            self.model_state = "stopped"
             return
 
         parser = self.parser
@@ -375,6 +482,11 @@ class DemoWorker(threading.Thread):
         POST /wake_up blocks until vLLM has reloaded the weights into VRAM,
         which is exactly the latency we'd otherwise impose on the first page
         of the task as a confusing hang.
+
+        All failures are swallowed: this helper must NEVER crash the task or
+        push the worker into the `error` state. If the wake-up endpoint is
+        unreachable, the in-flight request will fail on its own with a much
+        more informative error from httpx.
         """
         if self.parser is None:
             return
@@ -383,12 +495,20 @@ class DemoWorker(threading.Thread):
         if is_sleeping is None or wake is None:
             return  # in-process transformers engine — no concept of sleep
         try:
-            if not is_sleeping():
-                return
-        except Exception:  # noqa: BLE001 — assume awake on error
+            sleeping = is_sleeping()
+        except Exception as error:  # noqa: BLE001 — vLLM might be mid-load
+            print(f"[worker] is_sleeping probe failed "
+                  f"({type(error).__name__}: {error}); assuming awake",
+                  flush=True)
+            return
+        if not sleeping:
             return
         try:
+            print("[worker] vLLM is sleeping — waking it up before the task",
+                  flush=True)
             wake()
+            print("[worker] vLLM wake_up returned; weights should be resident",
+                  flush=True)
         except Exception as error:  # noqa: BLE001 — log, don't crash the task
             traceback.print_exc()
             print(f"[worker] wake_up failed: {type(error).__name__}: {error}",
