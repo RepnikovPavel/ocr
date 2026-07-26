@@ -31,6 +31,8 @@ import os
 import shutil
 import subprocess
 import sys
+import time
+import traceback
 import uuid
 from pathlib import Path
 
@@ -98,26 +100,38 @@ db.init_db(STATE_DIR / "demo.db")
 # the document store shares the file: one database to deploy and back up
 docstore.init(STATE_DIR / "demo.db")
 
-WORKER = DemoWorker(
-    ckpt=CKPTDIR,
-    jobs_dir=JOBS_DIR,
-    device=os.environ.get("DEMO_DEVICE", "auto"),
-    dpi=INFER_DPI,
-    max_pixels=MAX_PIXELS,
-    # lazy by default: the GPU stays free until a task arrives
-    autostart=os.environ.get("DEMO_AUTOSTART", "0") == "1",
-    keep_loaded=os.environ.get("DEMO_KEEP_LOADED", "0") == "1",
-    idle_unload_seconds=int(os.environ.get("DEMO_IDLE_UNLOAD_S", "180")),
-    # empty => DotsMOCRParser's own default (flex_attention)
-    attn_implementation=os.environ.get("DEMO_ATTN_IMPLEMENTATION") or None,
-    # vLLM by default: measured 1.85x faster end to end on the same card with the
-    # same answers (reports/perf-findings.md §5). It needs a server to be running —
-    # scripts/run_local_vllm.sh starts both; scripts/run_local.sh selects the
-    # in-process engine for when there is none.
-    engine=os.environ.get("DEMO_ENGINE", "vllm"),
-    vllm_url=os.environ.get("DEMO_VLLM_URL"),
-    vllm_model=os.environ.get("DEMO_VLLM_MODEL"),
-)
+def _make_worker():
+    """Construct the DemoWorker from the current environment.
+
+    Centralised so the watchdog below can rebuild an identical worker if the
+    running thread dies (which, despite the self-heal in DemoWorker.run(), can
+    still happen on a fatal interpreter-level error). DemoWorker.__init__ owns
+    no resources — every GPU connection / parser is created lazily inside
+    run() — so re-creating the object is cheap and safe.
+    """
+    return DemoWorker(
+        ckpt=CKPTDIR,
+        jobs_dir=JOBS_DIR,
+        device=os.environ.get("DEMO_DEVICE", "auto"),
+        dpi=INFER_DPI,
+        max_pixels=MAX_PIXELS,
+        # lazy by default: the GPU stays free until a task arrives
+        autostart=os.environ.get("DEMO_AUTOSTART", "0") == "1",
+        keep_loaded=os.environ.get("DEMO_KEEP_LOADED", "0") == "1",
+        idle_unload_seconds=int(os.environ.get("DEMO_IDLE_UNLOAD_S", "180")),
+        # empty => DotsMOCRParser's own default (flex_attention)
+        attn_implementation=os.environ.get("DEMO_ATTN_IMPLEMENTATION") or None,
+        # vLLM by default: measured 1.85x faster end to end on the same card with the
+        # same answers (reports/perf-findings.md §5). It needs a server to be running —
+        # scripts/run_local_vllm.sh starts both; scripts/run_local.sh selects the
+        # in-process engine for when there is none.
+        engine=os.environ.get("DEMO_ENGINE", "vllm"),
+        vllm_url=os.environ.get("DEMO_VLLM_URL"),
+        vllm_model=os.environ.get("DEMO_VLLM_MODEL"),
+    )
+
+
+WORKER = _make_worker()
 
 app = FastAPI(title=VARIANTS[VARIANT]["title"])
 
@@ -152,6 +166,47 @@ def _start_worker():
             WORKER.start()
         except RuntimeError:
             pass
+
+
+def _worker_watchdog():
+    """Last-resort supervisor for the demo worker thread.
+
+    DemoWorker.run() self-heals on most exceptions, but a fatal interpreter
+    error (or an unhandled error in a nested helper) can still leave the thread
+    dead. Without this, the queue would freeze until someone restarted the
+    container — a real incident we have already had.
+
+    Every 30 s: if the worker thread is no longer alive, build a fresh one,
+    re-register it with the agent_api router (which otherwise keeps a stale
+    reference to the dead instance), and start it. The persisted queue lives
+    in SQLite and is picked up where it left off.
+    """
+    global WORKER
+    while True:
+        time.sleep(30)
+        try:
+            if WORKER.is_alive():
+                continue
+            print("[server] worker thread is dead; rebuilding and restarting",
+                  flush=True)
+            new_worker = _make_worker()
+            agent_api.configure(JOBS_DIR, new_worker,
+                                VARIANTS[VARIANT]["prompt_modes"],
+                                VARIANTS[VARIANT]["default_mode"])
+            WORKER = new_worker
+            WORKER.start()
+            print(f"[server] worker restarted: is_alive={WORKER.is_alive()} "
+                  f"ident={WORKER.ident}", flush=True)
+        except Exception as error:  # noqa: BLE001 — supervisor must not die
+            traceback.print_exc()
+            print(f"[server] watchdog cycle failed: {type(error).__name__}: "
+                  f"{error}; will retry in 30s", flush=True)
+
+
+if _os.environ.get("DEMO_SKIP_WATCHDOG") != "1":
+    import threading as _threading_mod
+    _threading_mod.Thread(target=_worker_watchdog, name="worker-watchdog",
+                          daemon=True).start()
 
 
 @app.middleware("http")
@@ -235,7 +290,20 @@ def gpu_snapshot():
 
 @app.get("/healthz")
 def healthz():
-    return {"status": "ok", "variant": VARIANT, **WORKER.status()}
+    # Surface worker liveness so docker healthcheck and scripts/doctor.sh can
+    # tell a truly healthy container from one whose API works but whose worker
+    # thread has died and silently stopped processing the queue. Returning 503
+    # on a dead worker lets `restart: unless-stopped` in compose.server.yml
+    # recycle the whole container as a last line of defence (the in-process
+    # watchdog in server.py is the first).
+    alive = WORKER.is_alive()
+    return JSONResponse(
+        {"status": "ok" if alive else "degraded",
+         "worker_alive": alive,
+         "variant": VARIANT,
+         **WORKER.status()},
+        status_code=200 if alive else 503,
+    )
 
 
 @app.get("/api/state")

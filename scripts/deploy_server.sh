@@ -29,6 +29,14 @@ fi
 
 [[ -n "$CKPT" && -d "$CKPT" ]] || { echo "CKPT must point at the checkpoint snapshot" >&2; exit 2; }
 mkdir -p "$STATE"
+# SQLite (the demo db lives here) creates -shm / -wal sidecar files at write
+# time under whatever uid the container process runs as. If $STATE ends up
+# owned by root from a systemd-launched deploy, subsequent WAL checkpoints by
+# the container can fail with sqlite3.OperationalError "unable to open database
+# file", which has historically crashed the worker thread. a+rwX keeps the
+# directory and everything in it world-writable; on a trusted single-user
+# deploy host this is the pragmatic fix. doctor.sh flags this state.
+chmod -R a+rwX "$STATE" 2>/dev/null || true
 CKPT=$(cd "$CKPT" && pwd -P)
 STATE=$(cd "$STATE" && pwd -P)
 
