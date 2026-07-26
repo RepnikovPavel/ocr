@@ -434,39 +434,68 @@ class DemoWorker(threading.Thread):
     # ------------------------------------------------------------ main loop
 
     def run(self):
+        # Self-healing outer loop. The inner `while` does the real work; any
+        # Exception that escapes it (most painfully sqlite3.OperationalError
+        # from db.has_queued_tasks() / db.claim_next_task() when the state
+        # volume briefly refuses a write — a recurring incident in production)
+        # used to kill this daemon thread silently. There is no other consumer
+        # for tasks, so the queue froze until someone noticed and restarted the
+        # container. We instead log, drop model state if it looks corrupt, and
+        # keep looping. The persisted queue lives in SQLite, so nothing in
+        # flight is lost; the next iteration will simply re-claim it.
         while not self._shutdown.is_set():
-            if self._reload_requested:
-                self._reload_requested = False
-                was_loaded = self.model_state == "loaded"
-                self._unload_model()
-                if was_loaded or self.keep_loaded:
-                    self._load_now = True  # reload on the new device
+            try:
+                self._run_loop_once()
+            except Exception as error:  # noqa: BLE001 — never let the worker die
+                traceback.print_exc()
+                print(f"[worker] main loop caught {type(error).__name__}: "
+                      f"{error}; backing off 10s and continuing", flush=True)
+                # An OperationalError often means the SQLite file/handle is in a
+                # bad state for this process right now; force the model state to
+                # be re-evaluated from scratch on the next pass.
+                try:
+                    if self.model_state == "loaded":
+                        self._unload_model()
+                except Exception:  # noqa: BLE001
+                    pass
+                # Sleep without holding the wakeup lock so we don't busy-loop
+                # on a persistent error (e.g. full disk).
+                time.sleep(10.0)
 
-            if self.paused:
-                if self.model_state == "loaded":
-                    self._unload_model()
-                self._wait()
-                continue
+    def _run_loop_once(self):
+        """One pass of the worker loop. See run() for the recovery wrapper."""
+        if self._reload_requested:
+            self._reload_requested = False
+            was_loaded = self.model_state == "loaded"
+            self._unload_model()
+            if was_loaded or self.keep_loaded:
+                self._load_now = True  # reload on the new device
 
-            demand = self._load_now or db.has_queued_tasks()
-            if demand and self.model_state in ("stopped", "error"):
-                self._load_model()
-            self._load_now = False
-
-            if self.model_state != "loaded":
-                self._wait()
-                continue
-
-            task = db.claim_next_task()
-            if task is not None:
-                self._run_task(task)
-                self._last_used = time.time()
-                continue
-
-            if (not self.keep_loaded
-                    and time.time() - self._last_used > self.idle_unload_seconds):
+        if self.paused:
+            if self.model_state == "loaded":
                 self._unload_model()
             self._wait()
+            return
+
+        demand = self._load_now or db.has_queued_tasks()
+        if demand and self.model_state in ("stopped", "error"):
+            self._load_model()
+        self._load_now = False
+
+        if self.model_state != "loaded":
+            self._wait()
+            return
+
+        task = db.claim_next_task()
+        if task is not None:
+            self._run_task(task)
+            self._last_used = time.time()
+            return
+
+        if (not self.keep_loaded
+                and time.time() - self._last_used > self.idle_unload_seconds):
+            self._unload_model()
+        self._wait()
 
     def _wait(self):
         self._wakeup.wait(timeout=1.0)

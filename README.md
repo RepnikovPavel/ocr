@@ -43,6 +43,9 @@ docker run --rm --gpus all --ipc=host -v /mnt:/mnt -v "$PWD:/workspace" dots-moc
 
 ## Для агентов: клиент ocrc и API парсинга
 
+**Полный agent-guide** (code map, env vars, частые ошибки, как поднять сервис,
+`scripts/doctor.sh` для диагностики): [AGENTS.md](AGENTS.md). Ниже — короткая версия.
+
 Агентам нужен не браузер, а один вызов и один артефакт. Для этого есть
 [ocrc](https://github.com/RepnikovPavel/ocrc) — клиент на одном файле Python
 без зависимостей:
