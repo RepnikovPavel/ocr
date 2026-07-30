@@ -63,7 +63,27 @@ prints the exact fix command. Exit non-zero = at least one critical failure.
 
 ## Bring the service up
 
-Three scenarios, simplest first:
+**Start with `scripts/bootstrap.sh`.** On a server it is one command that makes
+every decision for you: it finds the checkpoint, detects the CUDA driver and
+picks image tags that actually start on it (the cu13x `trtllm` build silently
+refuses on a CUDA 12 driver like a 4090's — this is what used to make deploys
+expensive), builds any missing image, runs `deploy_server.sh`, then `doctor.sh`,
+and prints the exact command your colleagues must run:
+
+```sh
+bash scripts/bootstrap.sh                 # 127.0.0.1, reach via SSH tunnel
+bash scripts/bootstrap.sh --bind lan      # 0.0.0.0 (trusted LAN — one-liner for colleagues)
+bash scripts/bootstrap.sh --dry-run       # detect + preflight only, deploy nothing
+bash scripts/bootstrap.sh --down          # stop
+```
+
+`bootstrap.sh` hands off to `deploy_server.sh` — it does not duplicate the deploy
+logic. Read `scripts/bootstrap.sh` to see exactly what it auto-detects
+(checkpoint paths, driver → image map) and how to override with `FORCE_*` /
+`CKPT` / `VLLM_GPU` / `DEMO_PORT`.
+
+The manual launchers below are for when you want a specific engine or are
+developing locally:
 
 ```sh
 # 1) local, vLLM engine (default, needs a checkpoint + GPU)
@@ -72,13 +92,26 @@ CKPTDIR=/path/to/dots.mocr scripts/run_local_vllm.sh
 # 2) local, in-process transformers engine (no separate vLLM container)
 CKPTDIR=/path/to/dots.mocr scripts/run_local.sh
 
-# 3) server deploy (docker compose: dots_mocr_demo + dots_vllm)
+# 3) server deploy (docker compose: dots_mocr_demo + dots_vllm) — what bootstrap.sh runs
 CKPT=/path/to/snapshot STATE=/path/to/state scripts/deploy_server.sh
 ```
 
-Both bring the demo up at `http://127.0.0.1:8601`. You need a checkpoint at
-`$CKPTDIR`/`$CKPT` — get it with `scripts/download_checkpoint.sh` then
+All of them bring the demo up at `http://127.0.0.1:8601`. You need a checkpoint
+at `$CKPTDIR`/`$CKPT` — get it with `scripts/download_checkpoint.sh` then
 `scripts/prepare_checkpoint.py`.
+
+## The parse cache is already built in — do NOT deploy a separate cache
+
+A recurring incident: a deploy agent "forgot to deploy SeaweedFS for caching
+already-parsed documents." **There is nothing to deploy.** Deduplication is
+built into the service itself (`demo/docstore.py`): every result is keyed on
+the SHA-256 of the uploaded bytes plus the prompt mode and page selection, and
+it starts automatically with the demo container — no extra service, no
+SeaweedFS, no S3. A repeat request for an already-parsed document is a SQLite
+lookup (~0.1 s, not a re-parse). See `ocrc stats` for the reuse ratio. So:
+
+- **Do not add or deploy a cache component.** It already exists and is on.
+- **Do not build client-side dedup either** — just re-submit; the store catches it.
 
 ## Validate without a GPU
 
@@ -104,6 +137,7 @@ waste time on a broken env.
 | `src/dots_mocr/utils/prompts.py` | the 7 prompt modes (layout_all/only, ocr, grounding_ocr, web_parsing, scene_spotting, general) |
 | `src/dots_mocr/transformers_patch/` | ported upstream modeling code |
 | `docker/compose.server.yml` | server deploy: `vllm` + `demo` services, docker.sock mount, `restart: unless-stopped` |
+| `scripts/bootstrap.sh` | **zero-decision server deploy**: finds checkpoint, detects CUDA → picks images, bakes missing, runs deploy_server.sh + doctor, prints the colleague one-liner |
 | `scripts/deploy_server.sh` | one-shot server deploy (chmod's the state dir to avoid the sqlite trap) |
 | `scripts/doctor.sh` | health check — run this first when debugging |
 
