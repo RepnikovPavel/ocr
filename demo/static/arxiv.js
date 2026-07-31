@@ -133,17 +133,30 @@ async function refreshRun(runId) {
   }
   el("grid-empty").style.display = (run.papers && run.papers.length) ? "none" : "block";
 
-  // progress bar = done steps / total steps
-  const total = (run.papers || []).length * ((run.stages && run.stages.length) || 6);
-  const done = (run.papers || []).reduce((acc, p) =>
-    acc + (run.stages || []).filter(s => (p.stages[s] || {}).status === "done").length, 0);
-  const failed = (run.papers || []).reduce((acc, p) =>
-    acc + (run.stages || []).filter(s => (p.stages[s] || {}).status === "error").length, 0);
+  // progress bar = done steps / total steps. Prefer the server-computed live
+  // counters (steps_done/total include in-flight progress); fall back to a
+  // grid-derived count for older responses that don't carry them.
+  const stages = run.stages || [];
+  const total = (typeof run.steps_total === "number")
+    ? run.steps_total
+    : (run.papers || []).length * (stages.length || 6);
+  const done = (typeof run.steps_done === "number")
+    ? run.steps_done
+    : (run.papers || []).reduce((acc, p) =>
+        acc + stages.filter(s => (p.stages[s] || {}).status === "done").length, 0);
+  const failed = (typeof run.steps_failed === "number")
+    ? run.steps_failed
+    : (run.papers || []).reduce((acc, p) =>
+        acc + stages.filter(s => (p.stages[s] || {}).status === "error").length, 0);
   const pct = total ? Math.round((done / total) * 100) : 0;
   const bar = el("run-bar");
   bar.style.width = `${pct}%`;
   bar.className = failed > 0 ? "err" : "";
-  el("run-counts").textContent = `${done}/${total} steps · ${failed} failed`;
+  const parsed = (typeof run.papers_parsed === "number")
+    ? run.papers_parsed
+    : (run.papers || []).filter(p =>
+        stages.every(s => (p.stages[s] || {}).status === "done")).length;
+  el("run-counts").textContent = `${done}/${total} steps · ${failed} failed · ${parsed} papers done`;
   el("run-summary").textContent = `· ${run.id} · ${run.query || ""} · ${run.status}`;
 
   // header: paper | title | one column per stage

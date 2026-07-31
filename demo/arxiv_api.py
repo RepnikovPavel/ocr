@@ -79,7 +79,27 @@ def get_run(run_id: str):
             "finished_at": step.get("finished_at"),
         }
     papers = [by_paper[aid] for aid in order]
-    return {**run, "stages": list(STAGES), "papers": papers}
+    # Live step counters derived from the grid, so the UI's progress bar and
+    # the run-list numbers reflect in-flight progress — not just the terminal
+    # counters in pipeline_runs, which only update when the whole run ends.
+    stages = list(STAGES)
+    steps_done = sum(1 for p in papers for s in stages
+                     if p["stages"].get(s, {}).get("status") == "done")
+    steps_failed = sum(1 for p in papers for s in stages
+                       if p["stages"].get(s, {}).get("status") == "error")
+    steps_skipped = sum(1 for p in papers for s in stages
+                        if p["stages"].get(s, {}).get("status") == "skipped")
+    return {**run, "stages": stages, "papers": papers,
+            "steps_total": len(papers) * len(stages),
+            "steps_done": steps_done,
+            "steps_failed": steps_failed,
+            "steps_skipped": steps_skipped,
+            "papers_parsed": sum(
+                1 for p in papers if all(
+                    p["stages"].get(s, {}).get("status") == "done" for s in stages)),
+            "papers_in_flight": sum(
+                1 for p in papers if any(
+                    p["stages"].get(s, {}).get("status") == "running" for s in stages))}
 
 
 # ----------------------------------------------------------------- papers
