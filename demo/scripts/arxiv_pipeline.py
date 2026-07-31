@@ -77,8 +77,11 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     state_dir = Path(args.state_dir)
-    db_path = state_dir / "demo.db"
     state_dir.mkdir(parents=True, exist_ok=True)
+    # The arxiv tables live in their own file (ARXIV_DB_PATH), separate from
+    # the container-owned demo.db — the runner is a normal user and demo.db
+    # is root-owned in the deploy, so they cannot share a writable file.
+    db_path = Path(os.environ.get("ARXIV_DB_PATH", str(state_dir / "arxiv.db")))
     arxiv_db.init(str(db_path))
     _emit(f"[runner] db={db_path}  storage={storage.store_kind()}  "
           f"ocr={args.ocr_url}  mode={args.prompt_mode}")

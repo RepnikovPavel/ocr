@@ -100,9 +100,15 @@ JOBS_DIR.mkdir(parents=True, exist_ok=True)
 db.init_db(STATE_DIR / "demo.db")
 # the document store shares the file: one database to deploy and back up
 docstore.init(STATE_DIR / "demo.db")
-# the arxiv pipeline tables share the same file too — the host-side runner
-# (with boto3) writes runs/steps, the container reads them here.
-arxiv_db.init(STATE_DIR / "demo.db")
+# the arxiv pipeline tables live in their OWN file. The host-side runner (a
+# user venv with boto3) writes runs/steps/papers here; the container only
+# reads them. Keeping it separate from demo.db avoids a cross-user write
+# conflict: demo.db is owned by the container's root, the runner runs as a
+# normal user, so a shared writable file would need carefully managed perms.
+# A separate arxiv.db is created by whichever process starts first.
+ARXIV_DB_PATH = Path(os.environ.get(
+    "ARXIV_DB_PATH", str(STATE_DIR / "arxiv.db")))
+arxiv_db.init(str(ARXIV_DB_PATH))
 
 def _make_worker():
     """Construct the DemoWorker from the current environment.
