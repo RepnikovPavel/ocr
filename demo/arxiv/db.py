@@ -244,8 +244,11 @@ def _promote_status(arxiv_id: str, target: str, *, extra: dict | None = None,
     Stages run out of order across re-runs (a cached parse skips wait_ocr) and
     the executor marks a paper failed on error, so without monotonic promotion
     a late `stored` could clobber an earlier `parsed`, or a stray `failed`
-    could erase a successful parse. Here we only ever move the status up the
-    rank ladder (or to `failed` when nothing better exists yet).
+    could erase a successful parse.
+
+    `failed` is a terminal error state, not a rung on the success ladder, so
+    it is gated only by `only_if_below` (don't fail a paper that already
+    parsed). The success rungs use rank comparison so they never regress.
     """
     now = _now()
     target_rank = _STATUS_RANK[target]
@@ -258,7 +261,9 @@ def _promote_status(arxiv_id: str, target: str, *, extra: dict | None = None,
         current = row["storage_status"] or PAPER_NEW
         if only_if_below is not None and _STATUS_RANK.get(current, 0) >= _STATUS_RANK[only_if_below]:
             return  # already at/above the gate (e.g. parsed) — don't fail it
-        if _STATUS_RANK.get(current, 0) > target_rank:
+        if target == PAPER_FAILED:
+            pass  # terminal error: allowed at any non-parsed stage
+        elif _STATUS_RANK.get(current, 0) > target_rank:
             return  # current is further along — don't regress
         sets = ["storage_status=?", "updated_at=?"]
         params = [target, now]
@@ -334,12 +339,20 @@ def list_runs(limit: int = 20) -> list[dict]:
 
 
 def steps_for_run(run_id: str) -> list[dict]:
-    """All step rows for a run, ordered for a stable paper×stage grid."""
+    """All step rows for a run, ordered for a stable paper×stage grid.
+
+    Sorted in DAG execution order (download -> submit_ocr -> ... -> index),
+    NOT alphabetically — the UI grid's columns must read left-to-right as the
+    pipeline actually runs. Implemented as a CASE mapping so the order lives
+    next to STAGES (the single source of truth) rather than in a magic string.
+    """
+    whens = " ".join(f"WHEN '{stage}' THEN {i}" for i, stage in enumerate(STAGES))
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT s.*, p.title, p.sha256, p.storage_status FROM pipeline_steps s "
-            "JOIN arxiv_papers p ON p.arxiv_id = s.arxiv_id "
-            "WHERE s.run_id=? ORDER BY s.arxiv_id, s.stage", (run_id,)).fetchall()
+            f"SELECT s.*, p.title, p.sha256, p.storage_status FROM pipeline_steps s "
+            f"JOIN arxiv_papers p ON p.arxiv_id = s.arxiv_id "
+            f"WHERE s.run_id=? ORDER BY s.arxiv_id, CASE s.stage {whens} "
+            f"ELSE 99 END", (run_id,)).fetchall()
         return [dict(r) for r in rows]
 
 
