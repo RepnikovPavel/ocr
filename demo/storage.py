@@ -83,6 +83,11 @@ class BlobStore:
     def size(self, sha256: str, kind: str, parser: str = "") -> Optional[int]:
         raise NotImplementedError
 
+    def presign(self, sha256: str, kind: str, parser: str = "",
+                expires: int = 7 * 24 * 3600) -> Optional[str]:
+        """Pre-signed GET URL (None if the backend can't, e.g. local disk)."""
+        return None
+
     def kind(self) -> str:
         return self.name
 
@@ -245,6 +250,23 @@ class SeaweedBlobStore(BlobStore):
             response = self._client.head_object(
                 Bucket=self.bucket, Key=self._key(sha256, kind, parser))
             return int(response.get("ContentLength") or 0)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def presign(self, sha256: str, kind: str, parser: str = "",
+                expires: int = 7 * 24 * 3600) -> Optional[str]:
+        """A pre-signed GET URL for a blob, valid for `expires` seconds.
+
+        Lets the boto3-less container serve a /bundle endpoint as a 302 to a
+        URL SeaweedFS honours without the caller holding credentials. The
+        runner (which has boto3) generates this once and stores it; the
+        container just redirects.
+        """
+        try:
+            return self._client.generate_presigned_url(
+                "get_object", Params={"Bucket": self.bucket,
+                                      "Key": self._key(sha256, kind, parser)},
+                ExpiresIn=expires)
         except Exception:  # noqa: BLE001
             return None
 

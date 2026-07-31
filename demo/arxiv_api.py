@@ -145,10 +145,19 @@ def paper_bundle(arxiv_id: str, parser: str = "dots_mocr"):
     ?parser=dots_mocr (default) | classic_fitz | classic_pdfplumber | ...
     Each parser has its own bundle in storage (parallel results), so the
     caller picks which to download. 404 if that parser never produced one.
+
+    When the bundle lives on SeaweedFS (which this container cannot read — it
+    has no boto3), redirect to a presigned URL the runner recorded. For the
+    local backend, stream the bytes directly.
     """
     paper = arxiv_db.get_paper(arxiv_id)
     if paper is None:
         raise HTTPException(404, "unknown paper")
+    parse = arxiv_db.get_parse(arxiv_id, parser)
+    if parse and parse.get("status") == "parsed" and parse.get("bundle_url"):
+        # SeaweedFS: redirect to the presigned URL the runner generated.
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=parse["bundle_url"])
     sha = paper.get("sha256")
     if not sha:
         raise HTTPException(404, "paper has no stored bundle (sha256 unknown)")

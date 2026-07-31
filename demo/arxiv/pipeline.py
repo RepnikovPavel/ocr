@@ -242,8 +242,12 @@ def stage_index(bundle_bytes: bytes, sha256: str, arxiv_id: str, parser: str,
         pages = int(meta.get("pages_done") or 0)
         if pages:
             db.set_paper_pages(arxiv_id, pages)
+        # Presign so the boto3-less container can redirect /bundle to SeaweedFS;
+        # empty for the local backend (the container reads local files directly).
+        bundle_url = storage.get_store().presign(sha256, storage.KIND_BUNDLE, parser) or ""
         db.record_parse(arxiv_id, parser, sha256, status="parsed",
-                        pages_done=pages, bundle_key=f"<sha>.{parser}.bundle")
+                        pages_done=pages, bundle_key=f"<sha>.{parser}.bundle",
+                        bundle_url=bundle_url)
         if on_detail:
             on_detail(f"{pages} pages indexed by {parser}")
         return pages

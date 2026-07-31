@@ -118,6 +118,8 @@ CREATE TABLE IF NOT EXISTS paper_parses (
     status       TEXT NOT NULL,           -- parsed | failed
     pages_done   INTEGER NOT NULL DEFAULT 0,
     bundle_key   TEXT,                    -- storage key for <sha>.<parser>.bundle
+    bundle_url   TEXT,                    -- presigned GET URL (SeaweedFS) so the
+                                          -- boto3-less container can redirect /bundle
     error        TEXT,
     created_at   REAL NOT NULL,
     finished_at  REAL,
@@ -157,6 +159,8 @@ def _migrate(conn) -> None:
     if has_column("pipeline_runs", "id") and not has_column("pipeline_runs", "parser"):
         conn.execute("ALTER TABLE pipeline_runs ADD COLUMN parser TEXT NOT NULL DEFAULT 'dots_mocr'")
         conn.execute("ALTER TABLE pipeline_runs ADD COLUMN download_only INTEGER NOT NULL DEFAULT 0")
+    if has_column("paper_parses", "arxiv_id") and not has_column("paper_parses", "bundle_url"):
+        conn.execute("ALTER TABLE paper_parses ADD COLUMN bundle_url TEXT")
 
 
 def _connect():
@@ -383,25 +387,28 @@ def count_papers() -> dict:
 
 def record_parse(arxiv_id: str, parser: str, sha256: str, *,
                  status: str = "parsed", pages_done: int = 0,
-                 bundle_key: str = "", error: str = "", finished: bool = True) -> None:
+                 bundle_key: str = "", bundle_url: str = "",
+                 error: str = "", finished: bool = True) -> None:
     """Upsert a parse result for (paper, parser).
 
     One paper can be parsed by several parsers; each gets its own row and its
-    own bundle in storage. The paper's `parsed` flag is set whenever at least
-    one parser succeeded.
+    own bundle in storage. `bundle_url` is a presigned GET URL the boto3-less
+    container redirects /bundle to (SeaweedFS); empty for the local backend.
+    The paper's `parsed` flag is set whenever at least one parser succeeded.
     """
     now = _now()
     with _connect() as conn:
         conn.execute(
             "INSERT INTO paper_parses (arxiv_id, parser, sha256, status, "
-            "pages_done, bundle_key, error, created_at, finished_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "pages_done, bundle_key, bundle_url, error, created_at, finished_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(arxiv_id, parser) DO UPDATE SET "
             "sha256=excluded.sha256, status=excluded.status, "
             "pages_done=excluded.pages_done, bundle_key=excluded.bundle_key, "
-            "error=excluded.error, finished_at=excluded.finished_at",
-            (arxiv_id, parser, sha256, status, pages_done, bundle_key, error, now,
-             now if finished else None))
+            "bundle_url=excluded.bundle_url, error=excluded.error, "
+            "finished_at=excluded.finished_at",
+            (arxiv_id, parser, sha256, status, pages_done, bundle_key, bundle_url,
+             error, now, now if finished else None))
     if status == "parsed":
         set_paper_parsed(arxiv_id)
 
