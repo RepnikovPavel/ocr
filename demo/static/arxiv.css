@@ -67,6 +67,15 @@ main { display: flex; gap: 10px; padding: 10px; height: calc(100vh - 54px); }
 .stat .k { color: #9aa3b8; font-size: 0.78em; }
 .stat .v { font-size: 1.15em; font-weight: 600; }
 
+/* parser chips: one per algorithm a paper was parsed by; click downloads */
+.parser-chip {
+  display: inline-block; background: #1d2536; color: #9db2ff;
+  border: 1px solid #2e3a55; border-radius: 4px; padding: 0 5px;
+  font-size: 0.74em; text-decoration: none; margin-right: 3px;
+}
+.parser-chip:hover { background: #283451; color: #c5d4ff; }
+.parsers { display: inline-flex; gap: 0; align-items: center; }
+
 /* papers */
 #paper-filter { width: 100%; margin-bottom: 8px; background: #10141d; color: #e6e8f0; border: 1px solid #3a4255; border-radius: 6px; padding: 6px 8px; }
 .paper-row { padding: 7px 8px; border-bottom: 1px solid #1d2230; cursor: pointer; }

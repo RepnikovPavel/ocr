@@ -76,8 +76,13 @@ async function refreshStats() {
     ["stored", p.stored || 0],
     ["bytes", fmtBytes(p.bytes || 0)],
   ];
+  // one coverage cell per parser that has produced bundles
+  const byParser = p.by_parser || {};
+  Object.keys(byParser).sort().forEach(pr => {
+    cells.push([pr, byParser[pr]]);
+  });
   el("stats").innerHTML = cells.map(([k, v]) =>
-    `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+    `<div class="stat"><div class="k">${escapeHtml(k)}</div><div class="v">${v}</div></div>`).join("");
 }
 
 // ----------------------------------------------------------------- runs list
@@ -157,7 +162,11 @@ async function refreshRun(runId) {
     : (run.papers || []).filter(p =>
         stages.every(s => (p.stages[s] || {}).status === "done")).length;
   el("run-counts").textContent = `${done}/${total} steps · ${failed} failed · ${parsed} papers done`;
-  el("run-summary").textContent = `· ${run.id} · ${run.query || ""} · ${run.status}`;
+  // show which parser this run is using (and download-only runs), so the grid
+  // is read in context: a classic_fitz run finishes fast, dots_mocr is slow.
+  const runKind = run.download_only ? "download-only"
+    : (run.parser ? run.parser : "dots_mocr");
+  el("run-summary").textContent = `· ${run.id} · ${run.query || ""} · ${run.status} · parser: ${runKind}`;
 
   // header: paper | title | one column per stage
   const stages = run.stages || [];
@@ -205,20 +214,24 @@ function renderPapers() {
   });
   const html = list.map(p => {
     const pages = p.num_pages ? `<span class="pages">${p.num_pages}p</span>` : "";
+    // one badge per parser that produced a bundle; click downloads that parser's bundle
+    const parsers = (p.parsers || []).map(pr =>
+      `<a class="parser-chip" href="${API}/papers/${p.arxiv_id}/bundle?parser=${encodeURIComponent(pr)}" title="download ${pr} bundle">${pr}</a>`).join(" ");
     return `<div class="paper-row" data-id="${p.arxiv_id}">
         <div class="ptitle">${escapeHtml(p.title || p.arxiv_id)} ${pages}</div>
         <div class="pmeta">
           <code>${p.arxiv_id}</code>
           <span>${(p.categories || "").split(" ").slice(0, 3).join(" ")}</span>
-          ${p.sha256 ? `<span class="muted">sha ${p.sha256.slice(0, 8)}</span>` : ""}
+          ${parsers ? `<span class="parsers">${parsers}</span>` : ""}
           ${p.storage_status ? `<span class="muted">${p.storage_status}</span>` : ""}
         </div>
       </div>`;
   }).join("");
   el("papers-list").innerHTML = html || `<p class="empty">No parsed papers yet.</p>`;
+  // clicking the row body (not a parser chip) downloads the default bundle
   el("papers-list").querySelectorAll(".paper-row").forEach(node => {
-    node.onclick = () => {
-      // download the stored bundle zip
+    node.onclick = (e) => {
+      if (e.target.closest(".parser-chip")) return;  // chip handles its own click
       window.location.href = `${API}/papers/${node.dataset.id}/bundle`;
     };
   });

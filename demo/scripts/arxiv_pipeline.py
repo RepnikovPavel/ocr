@@ -60,7 +60,18 @@ def main(argv=None) -> int:
                         help="arxiv result offset (default 0)")
     parser.add_argument("--workers", type=int, default=2,
                         help="DAG concurrency (default 2; OCR is single-worker "
-                             "so raising this mostly overlaps downloads)")
+                             "so raising this mostly overlaps downloads). For "
+                             "local parsers (classic_*) each parse is CPU-bound "
+                             "and independent — raise to use the whole box.")
+    parser.add_argument("--parser", default=os.environ.get("ARXIV_PARSER", "dots_mocr"),
+                        choices=["dots_mocr", "classic_fitz", "classic_pdfplumber"],
+                        help="which parser to run (default dots_mocr). "
+                             "dots_mocr goes through the OCR service; classic_* "
+                             "run in-process (fast, GPU-less, no model).")
+    parser.add_argument("--download-all", action="store_true",
+                        help="only download PDFs into storage, skip parsing. "
+                             "Use to pre-fetch the whole corpus before any parse "
+                             "run, so later parses are I/O-free.")
     parser.add_argument("--ocr-url", default=os.environ.get(
                             "OCR_URL", pipeline.DEFAULT_OCR_URL),
                         help="OCR service base URL")
@@ -110,20 +121,25 @@ def main(argv=None) -> int:
     t1 = time.time()
     run_id = pipeline.run_pipeline(
         papers, query=args.query, ocr_url=args.ocr_url,
-        prompt_mode=args.prompt_mode, agent=args.agent, workers=args.workers)
+        prompt_mode=args.prompt_mode, agent=args.agent, workers=args.workers,
+        parser=args.parser, download_only=args.download_all)
     elapsed = time.time() - t1
 
     # 3. summary
     run = arxiv_db.get_run(run_id)
     counts = arxiv_db.count_papers()
+    kind = "download-only" if args.download_all else args.parser
     _emit("")
     _emit("=" * 60)
-    _emit(f"run {run_id}: {run['status']}  ({elapsed:.1f}s)")
+    _emit(f"run {run_id}: {run['status']}  parser={kind}  ({elapsed:.1f}s)")
     _emit(f"  papers in run : {len(papers)}")
     _emit(f"  steps done    : {run['done']}/{len(papers) * len(arxiv_db.STAGES)}")
     _emit(f"  steps failed  : {run['failed']}")
     _emit(f"  steps skipped : {run['skipped']}")
     _emit(f"  storage       : {storage.store_kind()}")
+    by_parser = ", ".join(f"{k}={v}" for k, v in
+                          sorted(counts.get("by_parser", {}).items())) or "—"
+    _emit(f"  coverage      : {by_parser}")
     _emit(f"  catalogue     : {counts['parsed']} parsed / "
           f"{counts['stored']} stored / {counts['total']} seen "
           f"({counts['bytes']/(1024*1024):.1f} MB)")

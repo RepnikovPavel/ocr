@@ -53,6 +53,18 @@ def list_runs(limit: int = 20):
     return {"runs": runs, "count": len(runs)}
 
 
+@router.get("/parsers")
+def list_parsers():
+    """Parser names the runner/UI may offer.
+
+    dots_mocr goes through the OCR service; classic_* run in-process. The UI
+    uses this to populate the parser selector and show coverage per parser.
+    """
+    from demo.arxiv import parsers as parsers_mod
+    local = sorted(parsers_mod.LOCAL_PARSERS)
+    return {"parsers": ["dots_mocr"] + local, "local": local}
+
+
 @router.get("/runs/{run_id}")
 def get_run(run_id: str):
     run = arxiv_db.get_run(run_id)
@@ -107,6 +119,11 @@ def get_run(run_id: str):
 @router.get("/papers")
 def list_papers(limit: int = 100, parsed_only: bool = False):
     papers = arxiv_db.list_papers(limit=limit, parsed_only=parsed_only)
+    # attach each paper's available parsers so the catalogue can show badges
+    # like "dots_mocr ✓ classic_fitz ✓"
+    for paper in papers:
+        parses = arxiv_db.list_parses(paper["arxiv_id"])
+        paper["parsers"] = [p["parser"] for p in parses if p["status"] == "parsed"]
     return {"papers": papers, "count": len(papers)}
 
 
@@ -115,17 +132,19 @@ def get_paper(arxiv_id: str):
     paper = arxiv_db.get_paper(arxiv_id)
     if paper is None:
         raise HTTPException(404, "unknown paper")
+    parses = arxiv_db.list_parses(arxiv_id)
+    paper["parses"] = parses
+    paper["parsers"] = [p["parser"] for p in parses if p["status"] == "parsed"]
     return paper
 
 
 @router.get("/papers/{arxiv_id}/bundle")
-def paper_bundle(arxiv_id: str):
-    """Serve the stored result bundle (zip) for a paper.
+def paper_bundle(arxiv_id: str, parser: str = "dots_mocr"):
+    """Serve a paper's parsed bundle for the requested parser.
 
-    Reads bytes from the BlobStore (SeaweedFS in prod, local in dev). The
-    container needs boto3 only if the backend is SeaweedFS — when the runner
-    has been storing to SeaweedFS and boto3 is absent here, this returns 502
-    with a clear message rather than crashing.
+    ?parser=dots_mocr (default) | classic_fitz | classic_pdfplumber | ...
+    Each parser has its own bundle in storage (parallel results), so the
+    caller picks which to download. 404 if that parser never produced one.
     """
     paper = arxiv_db.get_paper(arxiv_id)
     if paper is None:
@@ -134,12 +153,15 @@ def paper_bundle(arxiv_id: str):
     if not sha:
         raise HTTPException(404, "paper has no stored bundle (sha256 unknown)")
     try:
-        bundle = storage.get_bundle(sha)
+        bundle = storage.get_bundle(sha, parser=parser)
     except Exception as error:  # noqa: BLE001 — surface backend errors cleanly
         raise HTTPException(502, f"storage backend error: {error}")
     if bundle is None:
-        raise HTTPException(404, "bundle not in storage")
-    filename = f"{arxiv_id}.zip"
+        available = [p["parser"] for p in arxiv_db.list_parses(arxiv_id)
+                     if p["status"] == "parsed"]
+        raise HTTPException(
+            404, f"no bundle for parser '{parser}'. available: {available}")
+    filename = f"{arxiv_id}.{parser}.zip"
     return Response(
         content=bundle, media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'})
