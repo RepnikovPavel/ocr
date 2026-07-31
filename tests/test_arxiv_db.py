@@ -99,6 +99,22 @@ def test_count_papers(adb):
     assert c["parsed"] == 1
     assert c["stored"] == 1
     assert c["bytes"] == 500
+    # by_parser only counts rows in paper_parses (record_parse writes them);
+    # set_paper_parsed alone does not, so it's empty here
+    assert c["by_parser"] == {}
+
+
+def test_count_papers_by_parser(adb):
+    adb.upsert_paper(_paper("a"))
+    adb.upsert_paper(_paper("b"))
+    adb.set_paper_downloaded("a", "x" * 64, 500)
+    adb.set_paper_downloaded("b", "y" * 64, 700)
+    adb.record_parse("a", "dots_mocr", "x" * 64, pages_done=9)
+    adb.record_parse("a", "classic_fitz", "x" * 64, pages_done=9)
+    adb.record_parse("b", "classic_fitz", "y" * 64, pages_done=5)
+    c = adb.count_papers()
+    assert c["parsed"] == 2
+    assert c["by_parser"] == {"dots_mocr": 1, "classic_fitz": 2}
 
 
 def test_get_paper_by_sha(adb):

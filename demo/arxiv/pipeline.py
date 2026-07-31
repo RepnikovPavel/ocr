@@ -215,24 +215,25 @@ def stage_fetch_bundle(ocr_url: str, prompt_mode: str, sha256: str,
     return bundle
 
 
-def stage_store(bundle_bytes: bytes, sha256: str, arxiv_id: str,
+def stage_store(bundle_bytes: bytes, sha256: str, arxiv_id: str, parser: str,
                 *, on_detail=None) -> str:
     if on_detail:
         on_detail("storing bundle")
-    key = storage.put_bundle(sha256, bundle_bytes)
+    # keyed by (sha, parser) so dots_mocr and classic bundles coexist
+    key = storage.put_bundle(sha256, bundle_bytes, parser=parser)
     db.set_paper_stored(arxiv_id)
     if on_detail:
         on_detail("stored")
     return key
 
 
-def stage_index(bundle_bytes: bytes, sha256: str, arxiv_id: str,
+def stage_index(bundle_bytes: bytes, sha256: str, arxiv_id: str, parser: str,
                 *, on_detail=None) -> int:
-    """Extract page count from the bundle's meta.json for the DB index.
+    """Extract page count + record the parse, tagged by parser.
 
-    The markdown body is already in the OCR service's SQLite FTS index from
-    the parse itself; here we only lift the page count and tokens so the
-    pipeline's own table can summarise coverage without re-reading the PDF.
+    For dots.mocr the markdown body is already in the OCR service's own SQLite
+    FTS index from the parse; here we lift the page count and write a
+    paper_parses row so the catalogue knows WHICH parser produced this bundle.
     """
     try:
         with zipfile.ZipFile(io.BytesIO(bundle_bytes)) as archive:
@@ -241,10 +242,13 @@ def stage_index(bundle_bytes: bytes, sha256: str, arxiv_id: str,
         pages = int(meta.get("pages_done") or 0)
         if pages:
             db.set_paper_pages(arxiv_id, pages)
+        db.record_parse(arxiv_id, parser, sha256, status="parsed",
+                        pages_done=pages, bundle_key=f"<sha>.{parser}.bundle")
         if on_detail:
-            on_detail(f"{pages} pages indexed")
+            on_detail(f"{pages} pages indexed by {parser}")
         return pages
     except Exception as error:  # noqa: BLE001 — indexing is best-effort
+        db.record_parse(arxiv_id, parser, sha256, status="failed", error=str(error))
         if on_detail:
             on_detail(f"index skipped: {error}")
         return 0
@@ -252,9 +256,37 @@ def stage_index(bundle_bytes: bytes, sha256: str, arxiv_id: str,
 
 # ----------------------------------------------------------------- per-paper DAG
 
+def stage_local_parse(parser: str, pdf_bytes: bytes, sha256: str, arxiv_id: str,
+                      *, on_detail=None) -> bytes:
+    """Run a GPU-less classic parser on the PDF bytes and build a bundle.
+
+    Mirrors the OCR path's output shape (document.md + meta.json) so the rest
+    of the pipeline is parser-agnostic. Used for classic_fitz / classic_pdfplumber.
+    """
+    from demo.arxiv import parsers
+    if on_detail:
+        on_detail(f"parsing with {parser}")
+    result = parsers.parse_locally(parser, pdf_bytes)
+    bundle = parsers.build_bundle(result["markdown"], result["meta"], result["images"])
+    if on_detail:
+        on_detail(f"{result['meta'].get('pages_done', 0)} pages")
+    return bundle
+
+
+# ----------------------------------------------------------------- per-paper DAG
+
 def run_paper_dag(paper: dict, ocr_url: str, prompt_mode: str, agent: str,
-                  run_id: str) -> dict:
+                  run_id: str, parser: str = "dots_mocr",
+                  download_only: bool = False) -> dict:
     """Walk all stages for one paper, recording each in pipeline_steps.
+
+    `parser` selects the algorithm: dots_mocr goes through the OCR service
+    over HTTP (submit -> wait -> fetch bundle); a local parser
+    (classic_fitz / classic_pdfplumber) runs in-process and replaces the
+    submit/wait/fetch trio with a single parse stage.
+
+    `download_only` stops after the PDF is in storage — used to pre-fetch the
+    whole corpus before any parsing, so later parse runs are I/O-free.
 
     A failure short-circuits the remaining stages (marked `skipped` with the
     upstream reason) so the run's grid shows where it stopped instead of
@@ -278,38 +310,59 @@ def run_paper_dag(paper: dict, ocr_url: str, prompt_mode: str, agent: str,
                                             on_detail=lambda t: detail("download", t))
             db.step_done(run_id, arxiv_id, "download")
 
-        # 2. submit
-        db.step_start(run_id, arxiv_id, "submit_ocr")
-        submit = stage_submit_ocr(ocr_url, prompt_mode, agent, pdf_bytes, sha,
-                                  arxiv_id, on_detail=lambda t: detail("submit_ocr", t))
-        db.step_done(run_id, arxiv_id, "submit_ocr", f"status={submit.get('status')}")
+        # download-only runs stop here: PDF is in storage, parse skipped.
+        if download_only:
+            for stage in ("submit_ocr", "wait_ocr", "fetch_bundle", "store", "index"):
+                db.step_skip(run_id, arxiv_id, stage, "download-only run")
+            return {"arxiv_id": arxiv_id, "ok": True, "sha256": sha,
+                    "download_only": True}
 
-        # 3. wait (or skip if the parse was cached)
-        if submit.get("status") == "cached":
-            db.step_skip(run_id, arxiv_id, "wait_ocr", "OCR cache hit")
+        # 2-4. parse — three shapes depending on parser:
+        #   - dots_mocr : submit to OCR service, wait, fetch the bundle it built
+        #   - local parser (classic_fitz, ...): parse in-process into a bundle
+        #   - already-parsed by THIS parser: skip everything (cache hit)
+        if storage.has_bundle(sha, parser):
+            for stage in ("submit_ocr", "wait_ocr", "fetch_bundle"):
+                db.step_skip(run_id, arxiv_id, stage, f"{parser} bundle cached")
+            bundle = storage.get_bundle(sha, parser)
+        elif parser == "dots_mocr":
+            db.step_start(run_id, arxiv_id, "submit_ocr")
+            submit = stage_submit_ocr(ocr_url, prompt_mode, agent, pdf_bytes, sha,
+                                      arxiv_id, on_detail=lambda t: detail("submit_ocr", t))
+            db.step_done(run_id, arxiv_id, "submit_ocr", f"status={submit.get('status')}")
+            if submit.get("status") == "cached":
+                db.step_skip(run_id, arxiv_id, "wait_ocr", "OCR cache hit")
+            else:
+                db.step_start(run_id, arxiv_id, "wait_ocr")
+                stage_wait_ocr(ocr_url, prompt_mode, sha, arxiv_id, run_id,
+                               on_detail=lambda t: detail("wait_ocr", t))
+                db.step_done(run_id, arxiv_id, "wait_ocr")
+            db.step_start(run_id, arxiv_id, "fetch_bundle")
+            bundle = stage_fetch_bundle(ocr_url, prompt_mode, sha,
+                                        on_detail=lambda t: detail("fetch_bundle", t))
+            db.step_done(run_id, arxiv_id, "fetch_bundle")
         else:
-            db.step_start(run_id, arxiv_id, "wait_ocr")
-            stage_wait_ocr(ocr_url, prompt_mode, sha, arxiv_id, run_id,
-                           on_detail=lambda t: detail("wait_ocr", t))
-            db.step_done(run_id, arxiv_id, "wait_ocr")
+            # local parser collapses submit+wait+fetch into one in-process parse
+            db.step_start(run_id, arxiv_id, "submit_ocr")
+            db.step_detail(run_id, arxiv_id, "submit_ocr", f"local {parser}")
+            db.step_done(run_id, arxiv_id, "submit_ocr", f"local:{parser}")
+            db.step_skip(run_id, arxiv_id, "wait_ocr", "local parser (no OCR)")
+            db.step_start(run_id, arxiv_id, "fetch_bundle")
+            bundle = stage_local_parse(parser, pdf_bytes, sha, arxiv_id,
+                                       on_detail=lambda t: detail("fetch_bundle", t))
+            db.step_done(run_id, arxiv_id, "fetch_bundle")
 
-        # 4. fetch bundle
-        db.step_start(run_id, arxiv_id, "fetch_bundle")
-        bundle = stage_fetch_bundle(ocr_url, prompt_mode, sha,
-                                    on_detail=lambda t: detail("fetch_bundle", t))
-        db.step_done(run_id, arxiv_id, "fetch_bundle")
-
-        # 5. store bundle in SeaweedFS
+        # 5. store bundle in SeaweedFS (keyed by sha+parser)
         db.step_start(run_id, arxiv_id, "store")
-        stage_store(bundle, sha, arxiv_id, on_detail=lambda t: detail("store", t))
+        stage_store(bundle, sha, arxiv_id, parser, on_detail=lambda t: detail("store", t))
         db.step_done(run_id, arxiv_id, "store")
 
-        # 6. index
+        # 6. index (records paper_parses row tagged with parser)
         db.step_start(run_id, arxiv_id, "index")
-        stage_index(bundle, sha, arxiv_id, on_detail=lambda t: detail("index", t))
+        stage_index(bundle, sha, arxiv_id, parser, on_detail=lambda t: detail("index", t))
         db.step_done(run_id, arxiv_id, "index")
 
-        return {"arxiv_id": arxiv_id, "ok": True, "sha256": sha}
+        return {"arxiv_id": arxiv_id, "ok": True, "sha256": sha, "parser": parser}
     except Exception as error:  # noqa: BLE001 — isolate per paper
         # mark the failed stage error, skip the rest
         _fail_remaining(run_id, arxiv_id, error)
@@ -359,23 +412,31 @@ def discover(query: str, max_papers: int, polite: bool = True) -> list[dict]:
 
 def run_pipeline(papers: list[dict], *, query: str, ocr_url: str,
                  prompt_mode: str = DEFAULT_PROMPT_MODE,
-                 agent: str = "arxiv-pipeline", workers: int = 2) -> str:
+                 agent: str = "arxiv-pipeline", workers: int = 2,
+                 parser: str = "dots_mocr", download_only: bool = False) -> str:
     """Execute the DAG over N papers with bounded concurrency.
 
-    `workers` caps concurrency. Download/store/index are cheap and parallel-
-    friendly; submit/wait are gated by the OCR service's own single-worker
-    queue, so raising workers above ~2 mainly overlaps downloads with the
-    OCR of the previous paper. Returns the run_id.
+    `workers` caps concurrency. For dots_mocr, download/store are cheap and
+    parallel-friendly while submit/wait are gated by the OCR service's own
+    single-worker queue, so workers>~2 mostly overlaps downloads with the OCR
+    of the previous paper. For local parsers (classic_*), each paper's parse
+    is CPU-bound and independent — callers can safely raise workers to use the
+    whole box. `parser` selects the algorithm; `download_only` pre-fetches
+    PDFs into storage without parsing. Returns the run_id.
     """
     paper_ids = [p["arxiv_id"] for p in papers]
-    run_id = db.create_run(query, len(paper_ids), paper_ids)
+    run_id = db.create_run(query, len(paper_ids), paper_ids,
+                           parser=parser, download_only=download_only)
+    kind = "download-only" if download_only else parser
     print(f"[pipeline] run {run_id}: {len(paper_ids)} papers, "
-          f"workers={workers}, ocr={ocr_url}, mode={prompt_mode}", flush=True)
+          f"workers={workers}, parser={kind}, ocr={ocr_url}, mode={prompt_mode}",
+          flush=True)
 
     results = []
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
         futures = {
-            pool.submit(run_paper_dag, paper, ocr_url, prompt_mode, agent, run_id): paper
+            pool.submit(run_paper_dag, paper, ocr_url, prompt_mode, agent, run_id,
+                        parser, download_only): paper
             for paper in papers
         }
         for future in as_completed(futures):
@@ -392,5 +453,5 @@ def run_pipeline(papers: list[dict], *, query: str, ocr_url: str,
     ok = sum(1 for r in results if r.get("ok"))
     db.finish_run(run_id)
     print(f"[pipeline] run {run_id} finished: {ok}/{len(results)} ok "
-          f"(storage={storage.store_kind()})", flush=True)
+          f"(storage={storage.store_kind()}, parser={kind})", flush=True)
     return run_id

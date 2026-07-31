@@ -189,3 +189,99 @@ def test_run_pipeline_marks_run_error_when_some_fail(adb, fake_ocr, monkeypatch)
     r = db.get_run(run_id)
     assert r["status"] == "error"
     assert r["failed"] >= 1
+
+
+# ----------------------------------------------------------------- parser-tagged + download-only
+
+def _paper(i):
+    return {"arxiv_id": f"2306.{i:05d}", "title": f"Paper {i}", "authors": ["A"],
+            "summary": "s", "categories": "q-fin.TR", "published_at": "2023",
+            "pdf_url": f"https://arxiv.org/pdf/2306.{i:05d}",
+            "abs_url": f"https://arxiv.org/abs/2306.{i:05d}"}
+
+
+def test_download_only_stores_pdf_skips_parse(adb, fake_ocr, monkeypatch):
+    """--download-only fetches PDFs into storage and skips all parse stages."""
+    paper = _paper(40)
+    db.upsert_paper(paper)
+    # download_only must NOT touch the OCR service at all
+    def boom_submit(*a, **kw):
+        raise AssertionError("submit_to_ocr must not be called in download-only")
+    monkeypatch.setattr(pipeline, "submit_to_ocr", boom_submit)
+    run_id = pipeline.run_pipeline([paper], query="quant", ocr_url=OCR_URL,
+                                   prompt_mode=MODE, workers=1,
+                                   parser="dots_mocr", download_only=True)
+    steps = {s["stage"]: s for s in db.steps_for_run(run_id)}
+    assert steps["download"]["status"] == "done"
+    for stage in ("submit_ocr", "wait_ocr", "fetch_bundle", "store", "index"):
+        assert steps[stage]["status"] == "skipped", stage
+    sha = db.get_paper(paper["arxiv_id"])["sha256"]
+    assert storage.has_pdf(sha)
+    assert not storage.has_bundle(sha, "dots_mocr")
+    assert db.get_run(run_id)["download_only"] == 1
+
+
+def test_classic_local_parser_bypasses_ocr(adb, fake_ocr, monkeypatch):
+    """A local parser runs in-process; submit/wait collapse, no OCR call.
+
+    Uses a stub parser registered under a throwaway name so the test does not
+    depend on fitz being installed.
+    """
+    from demo.arxiv import parsers
+    monkeypatch.setattr(pipeline.time, "sleep", lambda s: None)
+
+    def stub_parse(pdf_bytes):
+        return {"markdown": "# stub\nparsed text",
+                "meta": {"parser": "stub", "pages": 1, "pages_done": 1},
+                "images": []}
+    parsers.register("stub", stub_parse, local=True)
+
+    paper = _paper(41)
+    db.upsert_paper(paper)
+    def boom_submit(*a, **kw):
+        raise AssertionError("local parser must not call the OCR service")
+    monkeypatch.setattr(pipeline, "submit_to_ocr", boom_submit)
+
+    run_id = pipeline.run_pipeline([paper], query="quant", ocr_url=OCR_URL,
+                                   prompt_mode=MODE, workers=1, parser="stub")
+    steps = {s["stage"]: s for s in db.steps_for_run(run_id)}
+    assert steps["submit_ocr"]["status"] == "done"
+    assert steps["wait_ocr"]["status"] == "skipped"  # local parser, no OCR wait
+    assert steps["store"]["status"] == "done"
+    assert steps["index"]["status"] == "done"
+
+    sha = db.get_paper(paper["arxiv_id"])["sha256"]
+    bundle = storage.get_bundle(sha, "stub")
+    assert bundle is not None
+    with zipfile.ZipFile(io.BytesIO(bundle)) as z:
+        assert json.loads(z.read("meta.json"))["parser"] == "stub"
+        assert b"parsed text" in z.read("document.md")
+    # paper_parses row tagged with the stub parser
+    parses = db.list_parses(paper["arxiv_id"])
+    assert [p["parser"] for p in parses] == ["stub"]
+
+
+def test_parsers_coexist_for_same_paper(adb, fake_ocr, monkeypatch):
+    """dots_mocr and a local parser each produce their own bundle+parse row."""
+    from demo.arxiv import parsers
+    monkeypatch.setattr(pipeline.time, "sleep", lambda s: None)
+    parsers.register("stub", lambda pb: {"markdown": "classic",
+        "meta": {"parser": "stub", "pages": 2, "pages_done": 2}, "images": []}, local=True)
+
+    paper = _paper(42)
+    db.upsert_paper(paper)
+    # dots_mocr run (uses the fake_ocr submit/status/bundle)
+    pipeline.run_pipeline([paper], query="quant", ocr_url=OCR_URL,
+                          prompt_mode=MODE, workers=1, parser="dots_mocr")
+    # classic run over the SAME paper
+    pipeline.run_pipeline([paper], query="quant", ocr_url=OCR_URL,
+                          prompt_mode=MODE, workers=1, parser="stub")
+
+    sha = db.get_paper(paper["arxiv_id"])["sha256"]
+    # both bundles present, neither clobbered the other
+    assert storage.has_bundle(sha, "dots_mocr")
+    assert storage.has_bundle(sha, "stub")
+    parses = {p["parser"] for p in db.list_parses(paper["arxiv_id"])}
+    assert parses == {"dots_mocr", "stub"}
+    counts = db.count_papers()
+    assert counts["by_parser"] == {"dots_mocr": 1, "stub": 1}

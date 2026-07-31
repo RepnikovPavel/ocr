@@ -72,6 +72,8 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     id          TEXT PRIMARY KEY,
     query       TEXT NOT NULL DEFAULT '',    -- the search that seeded this run
     max_papers  INTEGER NOT NULL DEFAULT 0,  -- intended size
+    parser      TEXT NOT NULL DEFAULT 'dots_mocr',  -- which parser this run used
+    download_only INTEGER NOT NULL DEFAULT 0,       -- 1 = fetch PDFs, skip parse
     status      TEXT NOT NULL DEFAULT 'running',  -- running|done|error|cancelled
     error       TEXT,
     created_at  REAL NOT NULL,
@@ -104,6 +106,25 @@ CREATE TABLE IF NOT EXISTS pipeline_meta (
     value TEXT NOT NULL,
     updated_at REAL NOT NULL
 );
+
+-- One row per (paper, parser): a paper parsed by dots.mocr AND by the classic
+-- fitz extractor has two rows here, pointing at two bundles in storage. This
+-- is the source of truth for "by what was this parsed"; arxiv_papers.parsed
+-- is just the derived boolean "has >=1 successful parse".
+CREATE TABLE IF NOT EXISTS paper_parses (
+    arxiv_id     TEXT NOT NULL,
+    parser       TEXT NOT NULL,           -- dots_mocr | classic_fitz | classic_pdfplumber | ...
+    sha256       TEXT NOT NULL,
+    status       TEXT NOT NULL,           -- parsed | failed
+    pages_done   INTEGER NOT NULL DEFAULT 0,
+    bundle_key   TEXT,                    -- storage key for <sha>.<parser>.bundle
+    error        TEXT,
+    created_at   REAL NOT NULL,
+    finished_at  REAL,
+    PRIMARY KEY (arxiv_id, parser)
+);
+CREATE INDEX IF NOT EXISTS idx_parses_sha ON paper_parses(sha256, parser);
+CREATE INDEX IF NOT EXISTS idx_parses_parser ON paper_parses(parser);
 """
 
 
@@ -329,26 +350,78 @@ def count_papers() -> dict:
         bytes_stored = conn.execute(
             "SELECT COALESCE(SUM(size_bytes),0) AS b FROM arxiv_papers "
             "WHERE sha256 IS NOT NULL").fetchone()["b"]
+        # per-parser coverage: how many papers each parser has produced a
+        # successful bundle for. Lets the UI show "dots_mocr: 187 / fitz: 412".
+        by_parser = {
+            r["parser"]: r["n"] for r in conn.execute(
+                "SELECT parser, COUNT(*) AS n FROM paper_parses "
+                "WHERE status='parsed' GROUP BY parser").fetchall()}
     return {"total": total, "parsed": parsed, "stored": stored,
-            "bytes": bytes_stored}
+            "bytes": bytes_stored, "by_parser": by_parser}
+
+
+# ----------------------------------------------------------------- parses (paper × parser)
+
+def record_parse(arxiv_id: str, parser: str, sha256: str, *,
+                 status: str = "parsed", pages_done: int = 0,
+                 bundle_key: str = "", error: str = "", finished: bool = True) -> None:
+    """Upsert a parse result for (paper, parser).
+
+    One paper can be parsed by several parsers; each gets its own row and its
+    own bundle in storage. The paper's `parsed` flag is set whenever at least
+    one parser succeeded.
+    """
+    now = _now()
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO paper_parses (arxiv_id, parser, sha256, status, "
+            "pages_done, bundle_key, error, created_at, finished_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(arxiv_id, parser) DO UPDATE SET "
+            "sha256=excluded.sha256, status=excluded.status, "
+            "pages_done=excluded.pages_done, bundle_key=excluded.bundle_key, "
+            "error=excluded.error, finished_at=excluded.finished_at",
+            (arxiv_id, parser, sha256, status, pages_done, bundle_key, error, now,
+             now if finished else None))
+    if status == "parsed":
+        set_paper_parsed(arxiv_id)
+
+
+def list_parses(arxiv_id: str) -> list[dict]:
+    """All parser results for one paper (e.g. dots_mocr + classic_fitz)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM paper_parses WHERE arxiv_id=? "
+            "ORDER BY finished_at DESC", (arxiv_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_parse(arxiv_id: str, parser: str) -> Optional[dict]:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM paper_parses WHERE arxiv_id=? AND parser=?",
+            (arxiv_id, parser)).fetchone()
+        return dict(row) if row else None
 
 
 # ----------------------------------------------------------------- runs
 
-def create_run(query: str, max_papers: int, paper_ids: list[str]) -> str:
+def create_run(query: str, max_papers: int, paper_ids: list[str], *,
+               parser: str = "dots_mocr", download_only: bool = False) -> str:
     """Open a run and pre-seed a `queued` step row for every paper's every stage.
 
     Pre-seeding means the UI can render the full grid (paper × stage) before
     anything starts, and a step that has never run is distinguishable from one
-    that errored.
+    that errored. `parser`/`download_only` are recorded on the run so the UI
+    can tell a dots.mocr run from a classic-extractor or a download-only run.
     """
     run_id = uuid.uuid4().hex[:12]
     now = _now()
     with _connect() as conn:
         conn.execute(
-            "INSERT INTO pipeline_runs (id, query, max_papers, status, created_at) "
-            "VALUES (?, ?, ?, 'running', ?)",
-            (run_id, query, max_papers, now))
+            "INSERT INTO pipeline_runs (id, query, max_papers, parser, "
+            "download_only, status, created_at) VALUES (?, ?, ?, ?, ?, 'running', ?)",
+            (run_id, query, max_papers, parser, 1 if download_only else 0, now))
         rows = [(run_id, pid, stage) for pid in paper_ids for stage in STAGES]
         conn.executemany(
             "INSERT OR IGNORE INTO pipeline_steps (run_id, arxiv_id, stage, status) "

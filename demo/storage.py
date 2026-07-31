@@ -49,6 +49,12 @@ KIND_PDF = "pdf"
 KIND_BUNDLE = "bundle"
 VALID_KINDS = (KIND_PDF, KIND_BUNDLE)
 
+# Default parser tag for a bundle. The same PDF parsed by different algorithms
+# lives side by side: <sha>/dots_mocr.zip, <sha>/classic_fitz.zip, ... so a
+# parser name is part of every bundle's storage key. PDFs are parser-agnostic
+# (they're the source bytes, not a parse result), so KIND_PDF ignores it.
+DEFAULT_PARSER = "dots_mocr"
+
 
 class BlobStore:
     """Interface every backend implements.
@@ -60,21 +66,21 @@ class BlobStore:
 
     name = "blob-store"
 
-    def put(self, sha256: str, kind: str, data: bytes) -> str:
-        """Store `data` under (sha256, kind). Returns a storage key/path."""
+    def put(self, sha256: str, kind: str, data: bytes, parser: str = "") -> str:
+        """Store `data` under (sha256, kind[, parser]). Returns a storage key."""
         raise NotImplementedError
 
-    def get(self, sha256: str, kind: str) -> Optional[bytes]:
+    def get(self, sha256: str, kind: str, parser: str = "") -> Optional[bytes]:
         """Return the bytes, or None if absent."""
         raise NotImplementedError
 
-    def exists(self, sha256: str, kind: str) -> bool:
+    def exists(self, sha256: str, kind: str, parser: str = "") -> bool:
         raise NotImplementedError
 
-    def delete(self, sha256: str, kind: str) -> None:
+    def delete(self, sha256: str, kind: str, parser: str = "") -> None:
         raise NotImplementedError
 
-    def size(self, sha256: str, kind: str) -> Optional[int]:
+    def size(self, sha256: str, kind: str, parser: str = "") -> Optional[int]:
         raise NotImplementedError
 
     def kind(self) -> str:
@@ -97,13 +103,16 @@ class LocalBlobStore(BlobStore):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
 
-    def _path(self, sha256: str, kind: str) -> Path:
+    def _path(self, sha256: str, kind: str, parser: str = "") -> Path:
         sha = sha256.lower()
         shard = sha[:2] + "/" + sha[2:4]
-        return self.root / shard / f"{sha}.{kind}"
+        # PDFs are parser-agnostic (source bytes); bundles carry a parser tag so
+        # the same sha can hold dots_mocr.zip and classic_fitz.zip side by side.
+        stem = f"{sha}.{parser}.{kind}" if parser and kind == KIND_BUNDLE else f"{sha}.{kind}"
+        return self.root / shard / stem
 
-    def put(self, sha256: str, kind: str, data: bytes) -> str:
-        path = self._path(sha256, kind)
+    def put(self, sha256: str, kind: str, data: bytes, parser: str = "") -> str:
+        path = self._path(sha256, kind, parser)
         path.parent.mkdir(parents=True, exist_ok=True)
         # write to a temp file in the same dir and rename, so a crash mid-write
         # never leaves a half-written blob that looks complete
@@ -112,24 +121,24 @@ class LocalBlobStore(BlobStore):
         tmp.replace(path)
         return str(path.relative_to(self.root))
 
-    def get(self, sha256: str, kind: str) -> Optional[bytes]:
-        path = self._path(sha256, kind)
+    def get(self, sha256: str, kind: str, parser: str = "") -> Optional[bytes]:
+        path = self._path(sha256, kind, parser)
         if not path.is_file():
             return None
         return path.read_bytes()
 
-    def exists(self, sha256: str, kind: str) -> bool:
-        return self._path(sha256, kind).is_file()
+    def exists(self, sha256: str, kind: str, parser: str = "") -> bool:
+        return self._path(sha256, kind, parser).is_file()
 
-    def delete(self, sha256: str, kind: str) -> None:
-        path = self._path(sha256, kind)
+    def delete(self, sha256: str, kind: str, parser: str = "") -> None:
+        path = self._path(sha256, kind, parser)
         try:
             path.unlink()
         except FileNotFoundError:
             pass
 
-    def size(self, sha256: str, kind: str) -> Optional[int]:
-        path = self._path(sha256, kind)
+    def size(self, sha256: str, kind: str, parser: str = "") -> Optional[int]:
+        path = self._path(sha256, kind, parser)
         return path.stat().st_size if path.is_file() else None
 
 
@@ -192,46 +201,49 @@ class SeaweedBlobStore(BlobStore):
             pass
 
     @staticmethod
-    def _key(sha256: str, kind: str) -> str:
+    def _key(sha256: str, kind: str, parser: str = "") -> str:
         sha = sha256.lower()
         # same sharding as the local backend so `ls` stays manageable inside
         # the filer; the path also reads naturally in the SeaweedFS web UI.
-        return f"{sha[:2]}/{sha[2:4]}/{sha}.{kind}"
+        stem = f"{sha}.{parser}.{kind}" if parser and kind == KIND_BUNDLE else f"{sha}.{kind}"
+        return f"{sha[:2]}/{sha[2:4]}/{stem}"
 
-    def put(self, sha256: str, kind: str, data: bytes) -> str:
-        key = self._key(sha256, kind)
+    def put(self, sha256: str, kind: str, data: bytes, parser: str = "") -> str:
+        key = self._key(sha256, kind, parser)
         self._client.put_object(Bucket=self.bucket, Key=key, Body=data)
         return key
 
-    def get(self, sha256: str, kind: str) -> Optional[bytes]:
+    def get(self, sha256: str, kind: str, parser: str = "") -> Optional[bytes]:
         try:
             response = self._client.get_object(Bucket=self.bucket,
-                                               Key=self._key(sha256, kind))
+                                               Key=self._key(sha256, kind, parser))
             return response["Body"].read()
         except self._client.exceptions.NoSuchKey:
             return None
         except Exception:  # noqa: BLE001 — connection blips should not crash reads
             return None
 
-    def exists(self, sha256: str, kind: str) -> bool:
+    def exists(self, sha256: str, kind: str, parser: str = "") -> bool:
         try:
-            self._client.head_object(Bucket=self.bucket, Key=self._key(sha256, kind))
+            self._client.head_object(Bucket=self.bucket,
+                                     Key=self._key(sha256, kind, parser))
             return True
         except self._client.exceptions.ClientError:
             return False
         except Exception:  # noqa: BLE001
             return False
 
-    def delete(self, sha256: str, kind: str) -> None:
+    def delete(self, sha256: str, kind: str, parser: str = "") -> None:
         try:
-            self._client.delete_object(Bucket=self.bucket, Key=self._key(sha256, kind))
+            self._client.delete_object(Bucket=self.bucket,
+                                       Key=self._key(sha256, kind, parser))
         except Exception:  # noqa: BLE001
             pass
 
-    def size(self, sha256: str, kind: str) -> Optional[int]:
+    def size(self, sha256: str, kind: str, parser: str = "") -> Optional[int]:
         try:
-            response = self._client.head_object(Bucket=self.bucket,
-                                                Key=self._key(sha256, kind))
+            response = self._client.head_object(
+                Bucket=self.bucket, Key=self._key(sha256, kind, parser))
             return int(response.get("ContentLength") or 0)
         except Exception:  # noqa: BLE001
             return None
@@ -311,9 +323,19 @@ def has_pdf(sha256: str) -> bool:
     return get_store().exists(sha256, KIND_PDF)
 
 
-def put_bundle(sha256: str, data: bytes) -> str:
-    return get_store().put(sha256, KIND_BUNDLE, data)
+def put_bundle(sha256: str, data: bytes, parser: str = DEFAULT_PARSER) -> str:
+    """Store a parsed bundle, tagged by which parser produced it.
+
+    The same PDF parsed by dots.mocr and by the classic text extractor lands
+    at different keys (<sha>.dots_mocr.bundle vs <sha>.classic_fitz.bundle),
+    so neither overwrites the other and both stay available for comparison.
+    """
+    return get_store().put(sha256, KIND_BUNDLE, data, parser=parser)
 
 
-def get_bundle(sha256: str) -> Optional[bytes]:
-    return get_store().get(sha256, KIND_BUNDLE)
+def get_bundle(sha256: str, parser: str = DEFAULT_PARSER) -> Optional[bytes]:
+    return get_store().get(sha256, KIND_BUNDLE, parser=parser)
+
+
+def has_bundle(sha256: str, parser: str = DEFAULT_PARSER) -> bool:
+    return get_store().exists(sha256, KIND_BUNDLE, parser=parser)
