@@ -13,7 +13,8 @@ import pytest
 import demo.storage as storage
 from demo.storage import (
     KIND_BUNDLE, KIND_PDF, LocalBlobStore, SeaweedBlobStore, configure_store,
-    get_store, put_bundle, put_pdf, sha256_bytes, store_kind)
+    get_bundle, get_store, has_bundle, put_bundle, put_pdf, sha256_bytes,
+    store_kind)
 
 
 @pytest.fixture(autouse=True)
