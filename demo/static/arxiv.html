@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>__TITLE__</title>
+  <link rel="stylesheet" href="/static/arxiv.css">
+</head>
+<body>
+<header>
+  <h1>📄 arxiv quant / algo-trading pipeline</h1>
+  <span id="storage-badge" class="badge">storage: …</span>
+  <span id="last-run-badge" class="badge secondary">no run yet</span>
+  <span style="margin-left:auto">
+    <a href="/" class="muted">← OCR demo</a>
+  </span>
+</header>
+
+<main>
+  <!-- LEFT: live run grid -->
+  <section id="left">
+    <div class="panel">
+      <h3>Active run <span id="run-summary" class="muted"></span></h3>
+      <div id="run-progress" class="run-progress">
+        <div class="bar"><i id="run-bar" style="width:0%"></i></div>
+        <span id="run-counts" class="muted">—</span>
+      </div>
+      <div class="legend">
+        <span><i class="dot s-done"></i>done</span>
+        <span><i class="dot s-running"></i>running</span>
+        <span><i class="dot s-queued"></i>queued</span>
+        <span><i class="dot s-skipped"></i>skipped</span>
+        <span><i class="dot s-error"></i>error</span>
+      </div>
+      <table id="grid" class="grid">
+        <thead><tr id="grid-head"></tr></thead>
+        <tbody id="grid-body"></tbody>
+      </table>
+      <p id="grid-empty" class="muted">No run selected. Start one from the host runner
+        (see README_ARXIV_PIPELINE.md), or pick a past run on the right.</p>
+    </div>
+
+    <div class="panel">
+      <h3>Recent runs</h3>
+      <div id="runs-list"></div>
+    </div>
+  </section>
+
+  <!-- RIGHT: catalogue + stats -->
+  <section id="right">
+    <div class="panel">
+      <h3>Stats</h3>
+      <div id="stats" class="stats-grid"></div>
+    </div>
+    <div class="panel">
+      <h3>Parsed papers <span class="muted">(click a row for the bundle)</span></h3>
+      <input id="paper-filter" placeholder="filter by title / arxiv id / category…">
+      <div id="papers-list"></div>
+    </div>
+  </section>
+</main>
+
+<script src="/static/arxiv.js"></script>
+</body>
+</html>

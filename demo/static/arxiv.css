@@ -1,0 +1,78 @@
+:root { color-scheme: dark; font-family: system-ui, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #0f1117; color: #e6e8f0; font-size: 14px; }
+
+header {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 8px 14px; border-bottom: 1px solid #262b38; background: #12151d;
+  position: sticky; top: 0; z-index: 10;
+}
+header h1 { font-size: 1.02em; margin: 0; }
+header .badge { font-size: 0.82em; }
+.badge { background: #2a3040; border-radius: 6px; padding: 2px 8px; }
+.badge.ok { background: #1d3a25; color: #8fe3a3; }
+.badge.warn { background: #3a2d1d; color: #e3c58f; }
+.badge.err { background: #3a1d1d; color: #e38f8f; }
+.badge.secondary { background: #343b4d; color: #c6cddd; }
+.muted { color: #9aa3b8; font-size: 0.88em; }
+a { color: #9db2ff; }
+
+main { display: flex; gap: 10px; padding: 10px; height: calc(100vh - 54px); }
+#left { flex: 0 0 58%; display: flex; flex-direction: column; min-width: 420px; }
+#right { flex: 1; overflow-y: auto; min-width: 360px; }
+
+.panel { background: #161a24; border: 1px solid #262b38; border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+.panel h3 { margin: 0 0 8px; font-size: 0.95em; }
+
+/* run progress bar */
+.run-progress { display: flex; align-items: center; gap: 10px; }
+.run-progress .bar { flex: 1; height: 8px; background: #2a3040; border-radius: 4px; overflow: hidden; }
+.run-progress .bar > i { display: block; height: 100%; background: #5c78ff; border-radius: 4px; transition: width 0.5s; }
+.run-progress .bar > i.err { background: #c25450; }
+
+/* legend */
+.legend { display: flex; gap: 14px; margin: 8px 0 10px; font-size: 0.8em; color: #9aa3b8; flex-wrap: wrap; }
+.legend .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+.s-done { background: #5fb374; }
+.s-running { background: #5c78ff; }
+.s-queued { background: #8a8f9e; }
+.s-skipped { background: #6b6f7d; }
+.s-error { background: #d35454; }
+
+/* paper × stage grid */
+.grid { width: 100%; border-collapse: collapse; font-size: 0.82em; }
+.grid th, .grid td { padding: 4px 6px; border-bottom: 1px solid #1d2230; text-align: left; }
+.grid th { color: #9aa3b8; font-weight: 600; font-size: 0.78em; position: sticky; top: 0; background: #161a24; }
+.grid td.paper-id { font-family: ui-monospace, monospace; white-space: nowrap; }
+.grid td.paper-title { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.grid td.cell { text-align: center; }
+.cell .pip { display: inline-block; width: 14px; height: 14px; border-radius: 3px; background: #2a3040; vertical-align: middle; }
+.cell .pip.s-done { background: #5fb374; }
+.cell .pip.s-running { background: #5c78ff; }
+.cell .pip.s-queued { background: #4a5060; }
+.cell .pip.s-skipped { background: #6b6f7d; }
+.cell .pip.s-error { background: #d35454; }
+.cell .pip.has-detail { cursor: help; outline: 1px solid #3a4255; }
+
+/* runs list */
+.runs-item { padding: 6px 8px; border-bottom: 1px solid #1d2230; cursor: pointer; display: flex; gap: 8px; align-items: center; font-size: 0.88em; }
+.runs-item:hover { background: #1a2030; }
+.runs-item.active { background: #1d2536; }
+.runs-item .rid { font-family: ui-monospace, monospace; color: #9db2ff; }
+.runs-item .when { margin-left: auto; color: #9aa3b8; font-size: 0.85em; }
+
+/* stats */
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+.stat { background: #11151f; border: 1px solid #262b38; border-radius: 8px; padding: 8px 10px; }
+.stat .k { color: #9aa3b8; font-size: 0.78em; }
+.stat .v { font-size: 1.15em; font-weight: 600; }
+
+/* papers */
+#paper-filter { width: 100%; margin-bottom: 8px; background: #10141d; color: #e6e8f0; border: 1px solid #3a4255; border-radius: 6px; padding: 6px 8px; }
+.paper-row { padding: 7px 8px; border-bottom: 1px solid #1d2230; cursor: pointer; }
+.paper-row:hover { background: #1a2030; }
+.paper-row .ptitle { font-weight: 600; font-size: 0.9em; }
+.paper-row .pmeta { color: #9aa3b8; font-size: 0.8em; margin-top: 2px; display: flex; gap: 10px; flex-wrap: wrap; }
+.paper-row .pmeta code { font-family: ui-monospace, monospace; color: #9db2ff; }
+.paper-row .pages { background: #1d3a25; color: #8fe3a3; border-radius: 4px; padding: 1px 6px; font-size: 0.8em; }
+.empty { color: #9aa3b8; font-size: 0.9em; padding: 6px 0; }
