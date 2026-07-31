@@ -1,0 +1,31 @@
+# Build image for the dots.mocr C++ + CUDA engine.
+#
+# CUDA 13.0 devel (cuDNN) gives us nvcc + cuBLAS + cudart headers. We add only
+# cmake and a recent g++ (the base ships gcc 12 on ubuntu22.04, which is fine
+# for C++17 but we install cmake explicitly). Nothing else — the engine is
+# dependency-free apart from the vendored header-only libs (nlohmann/json, stb).
+#
+# Build:
+#   docker build -t dots-mocr-cpp:build -f cpp/docker/Dockerfile.build .
+# Run (with the GPU + checkpoint mounted):
+#   docker run --rm --gpus all -v $(pwd)/cpp:/work/cpp \
+#       -v /mnt/nvme2/dots_mocr_ckpt:/ckpt:ro \
+#       dots-mocr-cpp:build bash -lc 'cd /work/cpp && cmake -B build -S . && cmake --build build -j'
+FROM nvcr.io/nvidia/cuda:13.0.0-cudnn-devel-ubuntu22.04
+
+# Skip interactive prompts and keep the image quiet.
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        cmake \
+        build-essential \
+        ninja-build \
+        git \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# nvcc and the CUDA toolkit live under /usr/local/cuda in the devel image; the
+# PATH is already set by the base's env vars. Confirm at build time.
+RUN nvcc --version && ls /usr/local/cuda/include/cuda_bf16.h
+
+WORKDIR /work

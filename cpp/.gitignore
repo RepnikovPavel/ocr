@@ -1,0 +1,11 @@
+build/
+*.o
+*.obj
+my_*.bin
+my_*.npy
+ref/
+test.png
+tiny.png
+doc.png
+*.bin
+*.npy
