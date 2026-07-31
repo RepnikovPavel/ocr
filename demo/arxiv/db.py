@@ -132,12 +132,31 @@ def init(path) -> None:
     """Bind to the shared db file and ensure the arxiv tables exist.
 
     Idempotent: safe to call from both the container and the runner; the
-    first to start creates the schema, the second is a no-op.
+    first to start creates the schema, the second is a no-op. Also runs
+    lightweight column migrations (ALTER TABLE ADD COLUMN) so an existing
+    arxiv.db from an older schema version is brought forward in place —
+    CREATE TABLE IF NOT EXISTS alone never adds columns to an existing table.
     """
     global _DB_PATH
     _DB_PATH = str(path)
     with _connect() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
+
+
+def _migrate(conn) -> None:
+    """Add columns introduced after the first release to existing tables.
+
+    Each is guarded by a PRAGMA table_info check so it runs once on old dbs
+    and is a no-op on new ones. Keeps the upgrade path explicit instead of
+    trying to diff schemas.
+    """
+    def has_column(table, column):
+        return any(row[1] == column for row in conn.execute(f"PRAGMA table_info({table})"))
+
+    if has_column("pipeline_runs", "id") and not has_column("pipeline_runs", "parser"):
+        conn.execute("ALTER TABLE pipeline_runs ADD COLUMN parser TEXT NOT NULL DEFAULT 'dots_mocr'")
+        conn.execute("ALTER TABLE pipeline_runs ADD COLUMN download_only INTEGER NOT NULL DEFAULT 0")
 
 
 def _connect():
