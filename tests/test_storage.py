@@ -111,10 +111,13 @@ def test_put_pdf_and_bundle_helpers(_fresh_store):
     bundle = b"PK\x03\x04 zip"
     sha = sha256_bytes(pdf)
     put_pdf(sha, pdf)
-    put_bundle(sha, bundle)
+    put_bundle(sha, bundle)  # defaults to parser=dots_mocr
     assert _fresh_store.get(sha, KIND_PDF) == pdf
-    assert _fresh_store.get(sha, KIND_BUNDLE) == bundle
+    assert _fresh_store.get(sha, KIND_BUNDLE, parser="dots_mocr") == bundle
     assert storage.has_pdf(sha)
+    # the helpers round-trip with their own default parser
+    assert get_bundle(sha) == bundle
+    assert storage.has_bundle(sha, "dots_mocr")
 
 
 # ---------------------------------------------------------------- factory
