@@ -61,6 +61,34 @@ def test_state_transitions(adb):
     assert p["parsed"] is True
 
 
+def test_status_is_monotonic(adb):
+    """A late `stored`/`failed` must never demote an already-parsed paper.
+
+    Stages run out of order across re-runs (a cached parse skips wait_ocr) and
+    the executor marks a paper failed on error — without monotonic promotion a
+    stray stored/failed could erase a successful parse.
+    """
+    adb.upsert_paper(_paper("m"))
+    adb.set_paper_downloaded("m", "ff" * 32, 1)
+    adb.set_paper_parsed("m")
+    # these must all be no-ops on the status column
+    adb.set_paper_stored("m")
+    assert adb.get_paper("m")["storage_status"] == "parsed"
+    adb.set_paper_downloaded("m", "ee" * 32, 2)
+    assert adb.get_paper("m")["storage_status"] == "parsed"
+    adb.set_paper_failed("m")
+    assert adb.get_paper("m")["storage_status"] == "parsed"
+    assert adb.get_paper("m")["parsed"] is True
+
+
+def test_failed_only_applies_when_not_parsed(adb):
+    """A paper that never reached parsed can be marked failed."""
+    adb.upsert_paper(_paper("f"))
+    adb.set_paper_downloaded("f", "11" * 32, 1)
+    adb.set_paper_failed("f")
+    assert adb.get_paper("f")["storage_status"] == "failed"
+
+
 def test_count_papers(adb):
     adb.upsert_paper(_paper("a"))
     adb.upsert_paper(_paper("b"))

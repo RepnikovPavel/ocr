@@ -186,11 +186,8 @@ def _paper_row(row) -> Optional[dict]:
 
 
 def set_paper_downloaded(arxiv_id: str, sha256: str, size_bytes: int) -> None:
-    with _connect() as conn:
-        conn.execute(
-            "UPDATE arxiv_papers SET sha256=?, size_bytes=?, "
-            "storage_status='downloaded', updated_at=? WHERE arxiv_id=?",
-            (sha256, size_bytes, _now(), arxiv_id))
+    _promote_status(arxiv_id, "downloaded",
+                    extra={"sha256": sha256, "size_bytes": size_bytes})
 
 
 def set_paper_pages(arxiv_id: str, num_pages: int) -> None:
@@ -201,10 +198,7 @@ def set_paper_pages(arxiv_id: str, num_pages: int) -> None:
 
 
 def set_paper_stored(arxiv_id: str) -> None:
-    with _connect() as conn:
-        conn.execute(
-            "UPDATE arxiv_papers SET storage_status='stored', updated_at=? "
-            "WHERE arxiv_id=?", (_now(), arxiv_id))
+    _promote_status(arxiv_id, "stored")
 
 
 def set_paper_submitted(arxiv_id: str, ocr_task_id: str) -> None:
@@ -215,17 +209,66 @@ def set_paper_submitted(arxiv_id: str, ocr_task_id: str) -> None:
 
 
 def set_paper_parsed(arxiv_id: str) -> None:
+    """Mark a paper fully parsed. `parsed` is monotonic (never un-sets)."""
     with _connect() as conn:
         conn.execute(
             "UPDATE arxiv_papers SET parsed=1, storage_status='parsed', "
-            "updated_at=? WHERE arxiv_id=?", (_now(), arxiv_id))
+            "updated_at=? WHERE arxiv_id=? AND parsed=0", (_now(), arxiv_id))
+    _promote_status(arxiv_id, "parsed")
 
 
 def set_paper_failed(arxiv_id: str) -> None:
+    """Mark a paper failed — only if it has not already been fully parsed.
+
+    A paper that parsed successfully on a previous run must not be demoted to
+    'failed' by a later run whose store/index stage errored (e.g. a transient
+    SeaweedFS hiccup); the parse is real and the bundle is recoverable from
+    the OCR service. Failed is only for papers that never reached 'parsed'.
+    """
+    _promote_status(arxiv_id, "failed", only_if_below="parsed")
+
+
+# Progression of storage_status. A later stage must never overwrite an earlier
+# success with a lower value; _promote_status enforces this so the column
+# always reflects the furthest stage the paper actually reached.
+_STATUS_RANK = {
+    PAPER_NEW: 0, PAPER_DOWNLOADED: 1, PAPER_STORED: 2,
+    PAPER_PARSED: 3, PAPER_FAILED: 0,
+}
+
+
+def _promote_status(arxiv_id: str, target: str, *, extra: dict | None = None,
+                    only_if_below: str | None = None) -> None:
+    """Advance storage_status to `target` iff that is forward progress.
+
+    Stages run out of order across re-runs (a cached parse skips wait_ocr) and
+    the executor marks a paper failed on error, so without monotonic promotion
+    a late `stored` could clobber an earlier `parsed`, or a stray `failed`
+    could erase a successful parse. Here we only ever move the status up the
+    rank ladder (or to `failed` when nothing better exists yet).
+    """
+    now = _now()
+    target_rank = _STATUS_RANK[target]
     with _connect() as conn:
+        row = conn.execute(
+            "SELECT storage_status, parsed FROM arxiv_papers WHERE arxiv_id=?",
+            (arxiv_id,)).fetchone()
+        if row is None:
+            return
+        current = row["storage_status"] or PAPER_NEW
+        if only_if_below is not None and _STATUS_RANK.get(current, 0) >= _STATUS_RANK[only_if_below]:
+            return  # already at/above the gate (e.g. parsed) — don't fail it
+        if _STATUS_RANK.get(current, 0) > target_rank:
+            return  # current is further along — don't regress
+        sets = ["storage_status=?", "updated_at=?"]
+        params = [target, now]
+        if extra:
+            for key, value in extra.items():
+                sets.append(f"{key}=?")
+                params.append(value)
+        params.append(arxiv_id)
         conn.execute(
-            "UPDATE arxiv_papers SET storage_status='failed', updated_at=? "
-            "WHERE arxiv_id=?", (_now(), arxiv_id))
+            f"UPDATE arxiv_papers SET {', '.join(sets)} WHERE arxiv_id=?", params)
 
 
 def list_papers(limit: int = 100, parsed_only: bool = False) -> list[dict]:
