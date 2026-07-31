@@ -60,8 +60,9 @@ NS = {
     "opensearch": "http://a9.com/-/spec/opensearch/1.1/",
 }
 
-# arxiv asks for at most 1 request every 3 seconds; we leave headroom.
-_POLITE_INTERVAL_S = 3.5
+# arxiv asks for at most 1 request every 3 seconds; in practice it throttles
+# harder under load (429s even at 3s spacing), so we leave real headroom.
+_POLITE_INTERVAL_S = 5.0
 _last_request_at = 0.0
 
 
@@ -149,13 +150,17 @@ def _clean_text(text: str) -> str:
 
 def search(named_query: str = DEFAULT_QUERY, max_results: int = 10,
            start: int = 0, sort_by: str = "submittedDate",
-           sort_order: str = "descending", timeout: float = 30.0,
-           polite: bool = True) -> list[dict]:
+           sort_order: str = "descending", timeout: float = 60.0,
+           polite: bool = True, max_retries: int = 4) -> list[dict]:
     """Run an arxiv search and return parsed paper dicts.
 
     Honours arxiv's "1 request per 3 seconds" rate limit by sleeping before
     each call when `polite` is True — the pipeline runs many searches and a
     ban is silent and long.
+
+    Retries on 429 (Too Many Requests) and network timeouts with exponential
+    backoff: arxiv throttles aggressively and a single denied request must
+    not fail a whole run. The Retry-After hint is honoured when present.
     """
     if polite:
         _rate_limit()
@@ -167,10 +172,42 @@ def search(named_query: str = DEFAULT_QUERY, max_results: int = 10,
         "sortOrder": sort_order,
     }
     url = f"{ARXIV_API}?{urllib.parse.urlencode(params)}"
-    response = requests.get(url, timeout=timeout,
-                            headers={"User-Agent": "dots-mocr-arxiv-pipeline/1.0"})
-    response.raise_for_status()
-    return parse_feed(response.content)
+    headers = {"User-Agent": "dots-mocr-arxiv-pipeline/1.0 "
+                             "(mailto:arxiv-pipeline@local)"}
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, timeout=timeout, headers=headers)
+            if response.status_code == 429:
+                # arxiv rate-limited us; back off hard and retry
+                wait = _retry_after(response, attempt)
+                last_error = RuntimeError(f"arxiv 429 rate limit (retry in {wait:.0f}s)")
+                time.sleep(wait)
+                continue
+            response.raise_for_status()
+            return parse_feed(response.content)
+        except (requests.Timeout, requests.ConnectionError) as error:
+            last_error = error
+            wait = _backoff(attempt)
+            time.sleep(wait)
+            continue
+    raise RuntimeError(f"arxiv search failed after {max_retries} retries: {last_error}")
+
+
+def _retry_after(response, attempt: int) -> float:
+    """Respect Retry-After when arxiv sends it, else exponential backoff."""
+    hint = response.headers.get("Retry-After")
+    if hint:
+        try:
+            return float(hint)
+        except ValueError:
+            pass
+    return _backoff(attempt)
+
+
+def _backoff(attempt: int) -> float:
+    """Exponential backoff capped at 60s: 5, 10, 20, 40..."""
+    return min(5 * (2 ** attempt), 60)
 
 
 def _rate_limit():
@@ -188,17 +225,35 @@ def fetch_pdf(pdf_url: str, timeout: float = 120.0) -> bytes:
     redirects (arxiv /pdf/<id> → the actual CDN). Raises on non-200 or a
     non-PDF content type — a 200 HTML page (e.g. an arxiv rate-limit page)
     must not be silently stored as a PDF.
+
+    Retries on 429 / timeouts: arxiv throttles PDF downloads just like search,
+    and a single throttle must not fail a paper permanently.
     """
-    response = requests.get(pdf_url, timeout=timeout, stream=True,
-                            headers={"User-Agent": "dots-mocr-arxiv-pipeline/1.0"})
-    response.raise_for_status()
-    ctype = response.headers.get("Content-Type", "").lower()
-    data = response.content
-    if "pdf" not in ctype and not data[:5].startswith(b"%PDF"):
-        raise ValueError(
-            f"{pdf_url} returned {ctype or 'no content-type'}, not a PDF "
-            f"(first bytes: {data[:32]!r})")
-    return data
+    headers = {"User-Agent": "dots-mocr-arxiv-pipeline/1.0 "
+                             "(mailto:arxiv-pipeline@local)"}
+    last_error = None
+    for attempt in range(4):
+        try:
+            response = requests.get(pdf_url, timeout=timeout, stream=True,
+                                    headers=headers)
+            if response.status_code == 429:
+                wait = _retry_after(response, attempt)
+                last_error = RuntimeError(f"arxiv 429 on pdf (retry in {wait:.0f}s)")
+                time.sleep(wait)
+                continue
+            response.raise_for_status()
+            ctype = response.headers.get("Content-Type", "").lower()
+            data = response.content
+            if "pdf" not in ctype and not data[:5].startswith(b"%PDF"):
+                raise ValueError(
+                    f"{pdf_url} returned {ctype or 'no content-type'}, not a PDF "
+                    f"(first bytes: {data[:32]!r})")
+            return data
+        except (requests.Timeout, requests.ConnectionError) as error:
+            last_error = error
+            time.sleep(_backoff(attempt))
+            continue
+    raise RuntimeError(f"pdf download failed after retries: {last_error}")
 
 
 # A minimal captured feed used by the test suite to exercise parse_feed without
