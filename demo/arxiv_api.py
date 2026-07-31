@@ -131,10 +131,16 @@ def paper_bundle(arxiv_id: str):
 def stats():
     counts = arxiv_db.count_papers()
     runs = arxiv_db.list_runs(limit=5)
-    try:
-        backend = storage.store_kind()
-    except Exception:  # noqa: BLE001 — stats must always answer
-        backend = "unavailable"
+    # Prefer the backend the runner reported (it has boto3 and knows whether
+    # it's really writing to SeaweedFS). Fall back to what THIS process would
+    # compute (local, since the container has no boto3) only if no runner has
+    # recorded one yet.
+    backend = arxiv_db.get_meta("storage_backend")
+    if not backend:
+        try:
+            backend = storage.store_kind()
+        except Exception:  # noqa: BLE001 — stats must always answer
+            backend = "unavailable"
     return {
         "papers": counts,
         "recent_runs": runs,

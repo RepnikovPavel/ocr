@@ -83,6 +83,9 @@ def main(argv=None) -> int:
     # is root-owned in the deploy, so they cannot share a writable file.
     db_path = Path(os.environ.get("ARXIV_DB_PATH", str(state_dir / "arxiv.db")))
     arxiv_db.init(str(db_path))
+    # Record the real storage backend so the container's /stats (which has no
+    # boto3 and would otherwise report 'local') reflects where blobs go.
+    arxiv_db.set_meta("storage_backend", storage.store_kind())
     _emit(f"[runner] db={db_path}  storage={storage.store_kind()}  "
           f"ocr={args.ocr_url}  mode={args.prompt_mode}")
 

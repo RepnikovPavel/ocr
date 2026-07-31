@@ -95,6 +95,15 @@ CREATE TABLE IF NOT EXISTS pipeline_steps (
     PRIMARY KEY (run_id, arxiv_id, stage)
 );
 CREATE INDEX IF NOT EXISTS idx_steps_run ON pipeline_steps(run_id, arxiv_id);
+
+-- Pipeline-wide facts the runner writes and the (boto3-less) container reads.
+-- Used so /api/v1/arxiv/stats can report the REAL storage backend the runner
+-- is writing to, instead of the local fallback the container would compute.
+CREATE TABLE IF NOT EXISTS pipeline_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at REAL NOT NULL
+);
 """
 
 
@@ -118,6 +127,30 @@ def _connect():
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     return conn
+
+
+# ----------------------------------------------------------------- meta (KV)
+
+def set_meta(key: str, value: str) -> None:
+    """Set a pipeline-wide fact (e.g. storage_backend) the container reads.
+
+    The container has no boto3, so it cannot itself tell whether the runner is
+    writing to SeaweedFS or to a local dir; the runner records that here and
+    /api/v1/arxiv/stats reads it back so the UI shows the real backend.
+    """
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO pipeline_meta (key, value, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
+            "updated_at=excluded.updated_at",
+            (key, str(value), _now()))
+
+
+def get_meta(key: str, default=None):
+    with _connect() as conn:
+        row = conn.execute("SELECT value FROM pipeline_meta WHERE key=?",
+                           (key,)).fetchone()
+        return row["value"] if row else default
 
 
 def _now():
