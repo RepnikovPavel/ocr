@@ -436,10 +436,24 @@ def _recompute_run(run_id: str) -> None:
             (done, failed, skipped, status, _now(), run_id))
 
 
-def finish_run(run_id: str, status: str = "done", error: str = "") -> None:
-    """Force-close a run (e.g. the runner process caught a fatal error)."""
+def finish_run(run_id: str, status: Optional[str] = None, error: str = "") -> None:
+    """Close a run, deriving status from steps unless one is forced.
+
+    With status=None (the default) the run's terminal status comes from
+    _recompute_run — 'done' if every step succeeded/skipped, 'error' if any
+    errored. A caller that caught a fatal error passes status='error' to
+    force-close regardless of step state (and provide an error string).
+    """
     _recompute_run(run_id)
+    now = _now()
     with _connect() as conn:
-        conn.execute(
-            "UPDATE pipeline_runs SET status=?, error=?, finished_at=? WHERE id=?",
-            (status, error, _now(), run_id))
+        if status is None:
+            # _recompute_run already set status + finished_at; just ensure
+            # finished_at is present for a run whose steps were all terminal.
+            conn.execute(
+                "UPDATE pipeline_runs SET finished_at=COALESCE(finished_at, ?) "
+                "WHERE id=?", (now, run_id))
+        else:
+            conn.execute(
+                "UPDATE pipeline_runs SET status=?, error=?, finished_at=? WHERE id=?",
+                (status, error, now, run_id))
