@@ -105,7 +105,7 @@ services:
     volumes:
       - ${REPO_ROOT:?set by deploy script}:/opt/dots-mocr:ro
       - ${GLM_CKPT_DIR:?set by deploy script}:/hf:ro
-      - ${GLM_STATE_DIR:-${STATE_DIR:-/nonexistent}-glm}:/state
+      - ${GLM_STATE_DIR:?set by deploy_dual.sh}:/state
       - /var/run/docker.sock:/var/run/docker.sock
     deploy:
       resources:
