@@ -43,4 +43,17 @@ dict_promptmode_to_prompt = {
     # "prompt_table_html": """Convert the table in this image to HTML.""",
     # "prompt_table_latex": """Convert the table in this image to LaTeX.""",
     # "prompt_formula_latex": """Convert the formula in this image to LaTeX.""",
+
+    # --- GLM-OCR (zai-org/GLM-OCR, 0.9B) triggers.
+    # GLM-OCR is cue-driven: each task is a fixed trigger phrase the model was
+    # trained on (model card "Document Parsing"). It does NOT understand the
+    # dots.mocr layout-JSON contract, so it gets its own prompt_mode namespace —
+    # the demo's prompt-mode selector and the docstore cache key both keep the
+    # two models' answers apart that way. See demo/models.py.
+    "glm_text_recognition": "Text Recognition:",
+    "glm_formula_recognition": "Formula Recognition:",
+    "glm_table_recognition": "Table Recognition:",
+    # Free-form QA — get_prompt() swaps in the user's custom_prompt, mirroring
+    # how prompt_general works for dots.mocr.
+    "glm_general": " ",
 }

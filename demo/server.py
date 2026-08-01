@@ -49,6 +49,7 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from demo import agent_api, db, docstore
+from demo import models as model_registry
 from demo.worker import PAGE_SECONDS_ESTIMATE, DemoWorker, default_temperature
 
 VARIANT = os.environ.get("DEMO_VARIANT", "mocr")
@@ -109,6 +110,14 @@ def _make_worker():
     no resources — every GPU connection / parser is created lazily inside
     run() — so re-creating the object is cheap and safe.
     """
+    # Model selector: when several models are deployed side by side (DEMO_MODEL_SELECTOR=1
+    # or DEMO_MODEL set), the worker resolves engine/url/model lazily from the
+    # registry (demo/models.py) at load time instead of the constructor args.
+    # Legacy single-model deploys leave these unset and keep the old behavior.
+    model_id = None
+    if (os.environ.get("DEMO_MODEL_SELECTOR") == "1"
+            or os.environ.get("DEMO_MODEL")):
+        model_id = model_registry.default_model_id()
     return DemoWorker(
         ckpt=CKPTDIR,
         jobs_dir=JOBS_DIR,
@@ -128,6 +137,7 @@ def _make_worker():
         engine=os.environ.get("DEMO_ENGINE", "vllm"),
         vllm_url=os.environ.get("DEMO_VLLM_URL"),
         vllm_model=os.environ.get("DEMO_VLLM_MODEL"),
+        model_id=model_id,
     )
 
 
@@ -135,8 +145,27 @@ WORKER = _make_worker()
 
 app = FastAPI(title=VARIANTS[VARIANT]["title"])
 
-agent_api.configure(JOBS_DIR, WORKER, VARIANTS[VARIANT]["prompt_modes"],
-                    VARIANTS[VARIANT]["default_mode"])
+
+def _active_prompt_modes():
+    """The prompt modes valid right now, for validation and the UI dropdown.
+
+    With the model selector off (single-model deploy), these are the variant's
+    fixed modes (dots.mocr's seven / svg's one). With it on, they come from the
+    selected model's registry spec and CHANGE when the user picks another model
+    — so this is re-read whenever the worker's model_id moves.
+    """
+    if WORKER.model_id is not None:
+        spec = model_registry.get_model(WORKER.model_id)
+        if spec is not None:
+            return spec["prompt_modes"], spec["default_mode"]
+    config = VARIANTS[VARIANT]
+    return config["prompt_modes"], config["default_mode"]
+
+
+# agent_api validates prompt_mode against this list, so it has to track the
+# selected model. Re-configure on every model switch (see /api/model/select).
+_modes, _default = _active_prompt_modes()
+agent_api.configure(JOBS_DIR, WORKER, _modes, _default)
 app.include_router(agent_api.router)
 
 
@@ -190,10 +219,9 @@ def _worker_watchdog():
             print("[server] worker thread is dead; rebuilding and restarting",
                   flush=True)
             new_worker = _make_worker()
-            agent_api.configure(JOBS_DIR, new_worker,
-                                VARIANTS[VARIANT]["prompt_modes"],
-                                VARIANTS[VARIANT]["default_mode"])
-            WORKER = new_worker
+            WORKER = new_worker  # _active_prompt_modes reads WORKER.model_id
+            modes, default = _active_prompt_modes()
+            agent_api.configure(JOBS_DIR, new_worker, modes, default)
             WORKER.start()
             print(f"[server] worker restarted: is_alive={WORKER.is_alive()} "
                   f"ident={WORKER.ident}", flush=True)
@@ -315,6 +343,8 @@ def api_state(request: Request):
     gpus = gpu_snapshot()
     # selectable inference devices: every visible GPU + auto (+ cpu for fallback)
     devices = ["auto"] + [f"cuda:{g['index']}" for g in gpus] + ["cpu"]
+    # prompt modes track the selected model (selector on) or the fixed variant.
+    active_modes, active_default = _active_prompt_modes()
     return {
         "variant": VARIANT,
         "title": config["title"],
@@ -328,9 +358,12 @@ def api_state(request: Request):
                 "default_temperature": default_temperature(mode),
                 "page_seconds_estimate": PAGE_SECONDS_ESTIMATE.get(mode, 45),
             }
-            for mode in config["prompt_modes"]
+            for mode in active_modes
         ],
-        "default_mode": config["default_mode"],
+        "default_mode": active_default,
+        # the whole model menu — only populated when the selector is on, so the
+        # UI hides the dropdown on single-model deploys (available_models is None)
+        "models": model_registry.models_public() if WORKER.model_id is not None else None,
         "worker": WORKER.status(),
         "gpus": gpus,
         "session": {"id": sid, "jobs": db.list_jobs(sid)},
@@ -530,6 +563,27 @@ def api_model_device(device: str = Form(...)):
     if device not in allowed:
         raise HTTPException(400, f"device must be one of {sorted(allowed)}")
     WORKER.set_device(device)
+    return WORKER.status()
+
+
+@app.post("/api/model/select")
+def api_model_select(model: str = Form(...)):
+    """Switch the active model (model selector).
+
+    Both models stay hot on their own vLLM server, so this repoints the worker
+    at the chosen one rather than loading weights. The agent_api prompt-mode
+    allowlist is reconfigured to the new model's modes, since GLM-OCR's trigger
+    modes are a different namespace from dots.mocr's layout skills.
+    """
+    if WORKER.model_id is None:
+        raise HTTPException(400, "model selector is not enabled on this deploy "
+                                 "(set DEMO_MODEL_SELECTOR=1)")
+    ok = WORKER.select_model(model)
+    if not ok:
+        raise HTTPException(400, f"unknown model: {model}")
+    # keep validation in sync with the now-selected model's prompt modes
+    modes, default = _active_prompt_modes()
+    agent_api.configure(JOBS_DIR, WORKER, modes, default)
     return WORKER.status()
 
 

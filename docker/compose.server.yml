@@ -59,6 +59,69 @@ services:
       retries: 30
       start_period: 180s
 
+  # Second model, hot on its own GPU. dots.mocr (dots_ocr + auto_map) only
+  # loads on the older vLLM the `vllm` service pins, while GLM-OCR (native
+  # glm_ocr in transformers 5.x) needs a current vLLM build — so they cannot
+  # share one server. On a 2x4090 host each model gets a card, the demo's model
+  # selector repoints the worker between them, and switching is instant (no
+  # weight reload). Gated by DEMO_DUAL=1: unset, the whole service is skipped
+  # and a single-model deploy is unchanged.
+  glm_vllm:
+    # vLLM 0.25.1 + transformers 5.13.1 on a CUDA-12.4 base. The official
+    # vllm/vllm-openai cu129/13 tags are refused by this host's
+    # nvidia-container-toolkit (legacy mode, cuda>=12.9 unsatisfied), but a
+    # CUDA-12.4 image runs fine on the same driver. This image is the one
+    # already present on the server; override with GLM_VLLM_IMAGE if needed.
+    image: ${GLM_VLLM_IMAGE:-qwen3-vllm:cu124}
+    container_name: ${GLM_VLLM_CONTAINER:-glm_vllm}
+    restart: unless-stopped
+    ipc: host
+    profiles: ["dual"]
+    # qwen3-vllm:cu124 has no vLLM entrypoint baked in, so invoke the server
+    # module explicitly. NOTE: the api_server module takes --model <path>, not
+    # a positional model arg (only the `vllm serve` CLI does) — a positional
+    # path here is silently ignored and vLLM falls back to a repo download.
+    entrypoint: ["python3", "-m", "vllm.entrypoints.openai.api_server"]
+    command:
+      # Path inside the container to the snapshot (the cache root is at /hf).
+      - --model=${GLM_CKPT:-/hf/models--zai-org--GLM-OCR/snapshots/main}
+      - --served-model-name=${GLM_MODEL_NAME:-glm-ocr}
+      - --gpu-memory-utilization=${GLM_GPU_UTIL:-0.85}
+      - --max-model-len=${GLM_MAX_MODEL_LEN:-32768}
+      # MTP speculative decode (model card) speeds up autoregression; cheap to
+      # try, compared in reports/ after the run.
+      - --speculative-config=${GLM_SPEC_CONFIG:-{"method":"mtp","num_speculative_tokens":3}}
+      - --enable-sleep-mode
+      - --host=0.0.0.0
+      - --port=8000
+    environment:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HOME: /tmp/hf
+      VLLM_SERVER_DEV_MODE: "1"
+    ports:
+      - "127.0.0.1:${GLM_VLLM_PORT:-8001}:8000"
+    volumes:
+      # Mount the WHOLE HF cache root, not just the snapshot dir: the snapshot
+      # holds symlinks into ../../blobs/, so mounting only snapshots/ leaves
+      # config.json and model.safetensors as broken links and vLLM falls back
+      # to a (offline-disabled) snapshot_download that then fails.
+      - ${GLM_CKPT_DIR:?set by deploy_dual.sh}:/hf:ro
+      - /mnt:/mnt:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${GLM_VLLM_GPU:-1}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 180s
+
   demo:
     image: ${DOTS_MOCR_IMAGE:-dots-mocr:trtllm-1.3.0rc20}
     container_name: ${DEMO_CONTAINER:-dots_mocr_demo}
@@ -80,6 +143,19 @@ services:
       # VRAM (sleep-mode alone leaves ~700 MiB of CUDA context resident).
       # See demo/worker.py:_stop_vllm_container. Requires the docker.sock mount below.
       DEMO_VLLM_CONTAINER: ${VLLM_CONTAINER:-dots_vllm}
+      # Model selector: with DEMO_DUAL=1 the glm_vllm service is up and the
+      # demo exposes a dropdown to switch between dots.mocr (GPU0) and GLM-OCR
+      # (GPU1). The *_DOTS vars let dots.mocr's endpoint be named explicitly
+      # alongside the GLM ones instead of relying on the single-model fallbacks
+      # in demo/models.py.
+      DEMO_MODEL_SELECTOR: ${DEMO_MODEL_SELECTOR:-0}
+      DEMO_MODEL: ${DEMO_MODEL:-dots_mocr}
+      DEMO_VLLM_URL_DOTS: http://127.0.0.1:${VLLM_PORT:-8000}/v1
+      DEMO_VLLM_MODEL_DOTS: ${VLLM_MODEL_NAME:-rednote-hilab/dots.mocr}
+      DEMO_VLLM_CONTAINER_DOTS: ${VLLM_CONTAINER:-dots_vllm}
+      DEMO_VLLM_URL_GLM: http://127.0.0.1:${GLM_VLLM_PORT:-8001}/v1
+      DEMO_VLLM_MODEL_GLM: ${GLM_MODEL_NAME:-glm-ocr}
+      DEMO_VLLM_CONTAINER_GLM: ${GLM_VLLM_CONTAINER:-glm_vllm}
       PORT: ${DEMO_PORT:-8601}
       DEMO_HOST: ${DEMO_HOST:-127.0.0.1}
       DOTS_MOCR_WEB_PORT: ${DEMO_PORT:-8601}
@@ -102,6 +178,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       vllm:
+        condition: service_healthy
+      # GLM-OCR vLLM — only waited on under the `dual` profile (DEMO_DUAL=1).
+      glm_vllm:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:${DEMO_PORT:-8601}/healthz || exit 1"]

@@ -24,6 +24,7 @@ async function pollState() {
     const res = await fetch("/api/state");
     const data = await res.json();
     if (data.server_time) state.timeOffset = data.server_time - Date.now() / 1000;
+    renderModelSelect(data.models, data.worker);
     renderModel(data.worker);
     renderDevices(data.devices, data.worker);
     renderGpus(data.gpus);
@@ -33,14 +34,45 @@ async function pollState() {
     // rebuild the queue DOM twice a second just to update one number
     renderLiveTps(data.worker && data.worker.live);
     initPeer(data);
-    if (!state.promptModes.length) initModes(data);
+    // prompt modes can change when the model is switched, so re-init whenever
+    // the server's menu no longer matches what we rendered last
+    if (!state.promptModes.length || modesChanged(data)) initModes(data);
   } catch (err) { /* server restarting; keep polling */ }
 }
 setInterval(pollState, 2000);
 
+function modesChanged(data) {
+  const server = (data.prompt_modes || []).map((m) => m.mode).join(",");
+  const ours = state.promptModes.map((m) => m.mode).join(",");
+  return server !== ours;
+}
+
+function renderModelSelect(models, worker) {
+  const row = $("model-select-row");
+  if (!models || !models.length) { row.hidden = true; return; }
+  row.hidden = false;
+  const sel = $("model-select");
+  const active = worker.model && worker.model.id;
+  const sig = models.map((m) => m.id).join(",") + "@" + (active || "");
+  // rebuild only when the menu or selection changed, never mid-pick
+  if (sel.dataset.sig !== sig && document.activeElement !== sel) {
+    sel.innerHTML = "";
+    models.forEach((m) => {
+      const o = document.createElement("option");
+      o.value = m.id; o.textContent = m.label;
+      sel.appendChild(o);
+    });
+    sel.dataset.sig = sig;
+  }
+  if (active && document.activeElement !== sel) sel.value = active;
+}
+
 function renderModel(worker) {
   const el = $("model-state");
-  let text = worker.model_state + (worker.device ? ` @ ${worker.device}` : "");
+  // lead with the model label when the selector is on — that's the dimension
+  // the user is actually flipping between in an A/B comparison
+  const label = worker.model ? `${worker.model.label}: ` : "";
+  let text = label + worker.model_state + (worker.device ? ` @ ${worker.device}` : "");
   // the device already reads "vllm" for that engine; do not say it twice
   if (worker.engine && worker.engine !== "transformers" && worker.engine !== worker.device) {
     text += ` · ${worker.engine}`;
@@ -94,6 +126,14 @@ $("keep-loaded").onchange = () => {
   body.append("value", $("keep-loaded").checked);
   fetch("/api/model/keep_loaded", {method: "POST", body}).then(pollState);
 };
+$("model-select").onchange = () => {
+  const body = new FormData();
+  body.append("model", $("model-select").value);
+  fetch("/api/model/select", {method: "POST", body})
+    .then((r) => { if (!r.ok) return r.text().then((t) => { throw new Error(t); }); })
+    .then(pollState)
+    .catch((e) => { $("run-error").textContent = "смена модели: " + e; });
+};
 $("device-select").onchange = () => {
   const body = new FormData();
   body.append("device", $("device-select").value);
@@ -127,7 +167,12 @@ const HELP = {
     </ul>
     <p>Модель сама загрузится на GPU при первой задаче и выгрузится после простоя
     (галочка «не выгружать» отключает выгрузку). Задачи можно останавливать в очереди —
-    даже после перезагрузки страницы.</p>`,
+    даже после перезагрузки страницы.</p>
+    <p><b>Сравнение моделей:</b> если в шапке есть селектор «модель», можно переключаться
+    между <b>dots.mocr</b> (layout JSON + bbox, 7 скиллов) и <b>GLM-OCR</b>
+    (распознавание текста/формул/таблиц, 4 режима). Обе модели при этом горячие на своих
+    GPU — переключение мгновенное. Прогоните один документ обеими и сравните качество и
+    скорость (время на страницу, t/s, TTFT — в карточке результата).</p>`,
   svg: `
     <p>Это демка модели <b>dots.mocr-svg</b> — генерация SVG-кода по изображению.
     Парсинг документов (OCR, layout) — у базовой модели dots.mocr, это другая демка
@@ -180,7 +225,6 @@ function currentMode() { return $("prompt-mode").value; }
 
 function onModeChange() {
   const mode = currentMode();
-  $("custom-prompt-row").hidden = mode !== "prompt_general";
   $("bbox-row").hidden = mode !== "prompt_grounding_ocr";
   const hints = {
     prompt_layout_all_en: "полный layout: bbox + категория + текст (JSON → Markdown)",
@@ -191,8 +235,14 @@ function onModeChange() {
     prompt_scene_spotting: "детекция текста в сцене (координаты + текст)",
     prompt_general: "свободный вопрос по странице",
     prompt_image_to_svg: "генерация SVG-кода по изображению (t=0.9, как у авторов)",
+    glm_text_recognition: "GLM-OCR: весь текст страницы (распознавание → Markdown)",
+    glm_formula_recognition: "GLM-OCR: формула в LaTeX",
+    glm_table_recognition: "GLM-OCR: таблица в Markdown-таблицу",
+    glm_general: "GLM-OCR: свободный вопрос по странице (своё поле промпта)",
   };
   $("mode-hint").textContent = hints[mode] || "";
+  // GLM 'general' is its free-QA mode, mirroring dots.mocr's prompt_general
+  $("custom-prompt-row").hidden = mode !== "prompt_general" && mode !== "glm_general";
 }
 
 /* ------------------------------------------------ upload & viewer */

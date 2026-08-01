@@ -33,6 +33,13 @@ PROMPT_TO_FITZ_PREPROCESS = {
 }
 PROMPT_TO_TEMPERATURE = {
     "prompt_image_to_svg": 0.9,
+    # GLM-OCR is deterministic by default (generation_config do_sample=false);
+    # a small temperature keeps its recognition output stable across reruns
+    # the way the demo's A/B comparison expects, matching dots.mocr's 0.1.
+    "glm_text_recognition": 0.1,
+    "glm_formula_recognition": 0.1,
+    "glm_table_recognition": 0.1,
+    "glm_general": 0.6,
 }
 DEFAULT_TEMPERATURE = 0.1
 
@@ -49,6 +56,12 @@ PAGE_SECONDS_ESTIMATE = {
     "prompt_scene_spotting": 25,
     "prompt_general": 15,
     "prompt_image_to_svg": 140,
+    # GLM-OCR: 0.9B + recognition-only (no layout-JSON post-processing), so a
+    # page is a couple of seconds, not tens. Rough until measured on a 4090.
+    "glm_text_recognition": 4,
+    "glm_formula_recognition": 3,
+    "glm_table_recognition": 4,
+    "glm_general": 6,
 }
 
 
@@ -85,7 +98,8 @@ class DemoWorker(threading.Thread):
                  max_pixels=2_200_000, max_completion_tokens=16384,
                  parser_factory=None, autostart=False, keep_loaded=False,
                  idle_unload_seconds=180, attn_implementation=None,
-                 engine="transformers", vllm_url=None, vllm_model=None):
+                 engine="transformers", vllm_url=None, vllm_model=None,
+                 model_id=None):
         super().__init__(daemon=True, name="demo-worker")
         self.ckpt = ckpt
         self.jobs_dir = Path(jobs_dir)
@@ -99,6 +113,12 @@ class DemoWorker(threading.Thread):
         self.engine = engine
         self.vllm_url = vllm_url or "http://127.0.0.1:8000/v1"
         self.vllm_model = vllm_model or "rednote-hilab/dots.mocr"
+        # The selected model registry id (demo/models.py). When the model
+        # selector is in use, engine/vllm_url/vllm_model/parser_factory all come
+        # from the registry spec instead of the legacy constructor args above.
+        # model_id=None keeps the old single-model behavior untouched.
+        self.model_id = model_id
+        self.model_spec = None
         self.dpi = dpi
         # Was chosen because the dense sdpa mask OOMed above ~2.2M px/page on 24GB
         # (reports/benchmark_2x4090_2026-07-15.md). The flex_attention backend
@@ -166,6 +186,53 @@ class DemoWorker(threading.Thread):
         self.abort_event.set()
         self._wakeup.set()
 
+    def select_model(self, model_id):
+        """Switch which model the worker drives (the model selector).
+
+        Both models stay hot on their own GPUs (two vLLM servers), so this is
+        NOT a weight swap — it repoints the worker at the other server and
+        rebuilds the parser client. The current parser is dropped; the next
+        task (or an explicit load) re-creates it against the new spec.
+
+        Aborts any in-flight generation first, the way set_device does: a half-
+        finished page from the old model would be a misleading A/B artifact.
+        Returns False for an unknown id without changing state.
+        """
+        from demo import models as _models
+
+        spec = _models.get_model(model_id)
+        if spec is None:
+            return False
+        if model_id == self.model_id and self.model_spec is not None:
+            return True  # already selected
+        # stop the current page before repointing — its stats belong to the old model
+        self.abort_event.set()
+        self.parser = None
+        if self.model_state != "error":
+            self.model_state = "stopped"
+        self.model_id = model_id
+        self.model_spec = spec
+        self.engine = spec["engine"]
+        self.vllm_url = spec["vllm_url"]
+        self.vllm_model = spec["vllm_model"]
+        self._parser_factory = lambda spec=spec: spec["parser_factory"](
+            spec["vllm_url"], spec["vllm_model"], self._parser_common())
+        self.paused = False
+        self._load_now = True
+        self._wakeup.set()
+        return True
+
+    def _parser_common(self):
+        """The kwargs shared by every model's parser_factory."""
+        return dict(
+            ckpt=self.ckpt,
+            temperature=DEFAULT_TEMPERATURE,
+            max_completion_tokens=self.max_completion_tokens,
+            dpi=self.dpi,
+            max_pixels=self.max_pixels,
+            num_thread=1,
+        )
+
     def notify_new_task(self):
         """A new task resumes a paused worker — the user asked for compute."""
         self.paused = False
@@ -190,6 +257,23 @@ class DemoWorker(threading.Thread):
         if (self.model_state == "loaded" and not self.keep_loaded
                 and self.current_task_id is None):
             unload_in = max(0, round(self.idle_unload_seconds - idle_for))
+        # The model registry (demo/models.py) drives the selector. When it is
+        # active we surface the chosen id+label and the full menu so the UI can
+        # render the dropdown; without it (legacy single-model deploys) these
+        # stay None and the frontend hides the selector.
+        from demo import models as _models
+        available = None
+        model_info = None
+        try:
+            registry = _models.get_models()
+            available = [
+                {"id": mid, "label": spec["label"]} for mid, spec in registry.items()
+            ]
+            if self.model_id and self.model_id in registry:
+                spec = registry[self.model_id]
+                model_info = {"id": self.model_id, "label": spec["label"]}
+        except Exception:  # noqa: BLE001 - status must not raise
+            pass
         return {
             "model_state": self.model_state,
             "model_error": self.model_error,
@@ -208,6 +292,8 @@ class DemoWorker(threading.Thread):
                 else (getattr(self.parser, "attn_implementation", None) if self.parser
                       else (self.attn_implementation or self._default_attn()))),
             "live": self.live_generation(),
+            "model": model_info,
+            "available_models": available,
         }
 
     @staticmethod
@@ -233,6 +319,21 @@ class DemoWorker(threading.Thread):
     # ------------------------------------------------------------ model
 
     def _default_parser_factory(self):
+        # Model selector active? Build from the registry spec instead of the
+        # legacy single-model args. select_model() installs its own factory that
+        # closes over the chosen spec; this branch covers the startup case where
+        # only model_id was set (server.py constructs with model_id=DEMO_MODEL).
+        if self.model_id is not None:
+            from demo import models as _models
+            spec = self.model_spec or _models.get_model(self.model_id)
+            if spec is not None:
+                self.model_spec = spec
+                self.engine = spec["engine"]
+                self.vllm_url = spec["vllm_url"]
+                self.vllm_model = spec["vllm_model"]
+                return spec["parser_factory"](
+                    spec["vllm_url"], spec["vllm_model"], self._parser_common())
+
         common = dict(
             ckpt=self.ckpt,
             temperature=DEFAULT_TEMPERATURE,
@@ -699,8 +800,7 @@ class DemoWorker(threading.Thread):
         )
         self._record_in_docstore(task, job, results)
 
-    @staticmethod
-    def _record_in_docstore(task, job, results):
+    def _record_in_docstore(self, task, job, results):
         """Cache the finished parse so an identical resubmission is a lookup.
 
         Only tasks that came in through the agent API carry a sha256, and only a
@@ -726,11 +826,15 @@ class DemoWorker(threading.Thread):
             seconds += page.get("seconds") or 0
         if not pieces:
             return
+        # which model produced this parse — falls back to dots_mocr for the
+        # legacy single-model path where model_id was never set.
+        model = self.model_id or "dots_mocr"
         try:
             docstore.store_result(
                 sha256=sha256, prompt_mode=task["prompt_mode"], pages=task["pages"],
                 task_id=task["id"], job_id=job["id"], markdown="\n\n".join(pieces),
                 pages_done=len(results), generated_tokens=tokens,
-                seconds=round(seconds, 2), filename=job.get("filename") or "")
+                seconds=round(seconds, 2), filename=job.get("filename") or "",
+                model=model)
         except Exception:  # noqa: BLE001 - caching must never fail a finished task
             traceback.print_exc()

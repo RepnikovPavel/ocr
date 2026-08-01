@@ -55,6 +55,16 @@ def init(path):
     _DB_PATH = str(path)
     with _connect() as conn:
         conn.executescript(SCHEMA)
+        # Light migration: the model selector added a `model` column so /stats
+        # and the bundle meta.json can say which model produced a cached parse.
+        # It is metadata only — the cache KEY stays (sha256, prompt_mode,
+        # pages_key), and prompt_mode is already unique per model — so this does
+        # not change lookup semantics. CREATE ... IF NOT EXISTS cannot add a
+        # column to an existing table, so guard with PRAGMA table_info.
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(document_results)")}
+        if "model" not in cols:
+            conn.execute(
+                "ALTER TABLE document_results ADD COLUMN model TEXT NOT NULL DEFAULT 'dots_mocr'")
 
 
 def _connect():
@@ -163,15 +173,16 @@ def find_fullest_result(sha256, prompt_mode):
 
 
 def store_result(sha256, prompt_mode, pages, task_id, job_id, markdown,
-                 pages_done, generated_tokens=0, seconds=0.0, filename=""):
+                 pages_done, generated_tokens=0, seconds=0.0, filename="", model="dots_mocr"):
     key = pages_key(pages)
     with _connect() as conn:
         conn.execute(
-            "INSERT OR REPLACE INTO document_results (sha256, prompt_mode, pages_key, "
-            "task_id, job_id, markdown, pages_done, generated_tokens, seconds, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO document_results "
+            "(sha256, prompt_mode, pages_key, task_id, job_id, markdown, pages_done, "
+            " generated_tokens, seconds, created_at, model) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (sha256, prompt_mode, key, task_id, job_id, markdown, pages_done,
-             generated_tokens, seconds, time.time()))
+             generated_tokens, seconds, time.time(), model))
         # keep the index in step: FTS5 has no upsert, so replace the row outright
         conn.execute("DELETE FROM document_search WHERE sha256=? AND prompt_mode=?",
                      (sha256, prompt_mode))
