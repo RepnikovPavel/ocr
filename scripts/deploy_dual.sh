@@ -19,9 +19,14 @@ COMPOSE="$ROOT/docker/compose.server.yml"
 CKPT="${CKPT:-${CKPTDIR:-${DOTS_MOCR_CKPT:-}}}"
 STATE="${STATE:-${DEMO_STATE_DIR:-$ROOT/server_state}}"
 DEMO_PORT="${DEMO_PORT:-8601}"
-GLM_DEMO_PORT="${GLM_DEMO_PORT:-8602}"
+GLM_DEMO_PORT="${GLM_DEMO_PORT:-8603}"
 VLLM_PORT="${VLLM_PORT:-8000}"
-BIND="${DOTS_MOCR_BIND:-127.0.0.1}"
+# Bind on the LAN so the demos are reachable as http://<host>:<port> from other
+# machines (bookmarked URLs), not only through an SSH tunnel. This host is on a
+# trusted internal network; override with DOTS_MOCR_BIND=127.0.0.1 to lock it
+# back down. NOTE: the demo has no auth — anyone who can route to this host can
+# use it. 8602 is taken by an existing demo_svg container, so GLM defaults to 8603.
+BIND="${DOTS_MOCR_BIND:-0.0.0.0}"
 # GLM-OCR HF cache. /mnt/data2/PMRepnikov is the documented "write big here"
 # spot; the home volume is small and was wiped once during this work.
 GLM_HF_CACHE="${GLM_HF_CACHE:-/mnt/data2/PMRepnikov/glm_ocr/hfhub}"
