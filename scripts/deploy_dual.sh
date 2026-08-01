@@ -42,8 +42,12 @@ chmod -R a+rwX "$STATE" "$GLM_STATE_DIR" 2>/dev/null || true
 CKPT=$(cd "$CKPT" && pwd -P)
 STATE=$(cd "$STATE" && pwd -P)
 
-# --- dots.mocr: symlink shadow that restores auto_map (same as deploy_server.sh)
-SHADOW="$STATE/vllm_ckpt"
+# --- dots.mocr: symlink shadow that restores auto_map (same as deploy_server.sh).
+# IMPORTANT: the shadow must live OUTSIDE /mnt. The vllm container bind-mounts
+# both $SHADOW:/ckpt AND /mnt:/mnt; when $SHADOW is under /mnt, the nested bind
+# leaves /ckpt empty inside the container (a Docker bind-propagation gotcha),
+# and vLLM fails with "can't load image processor for /ckpt".
+SHADOW="${VLLM_CKPT_SHADOW:-$HOME/ocr_state/vllm_ckpt}"
 rm -rf "$SHADOW"; mkdir -p "$SHADOW"
 for f in "$CKPT"/*; do
     case "$(basename "$f")" in config.json|config.json.bak) ;; *) ln -s "$f" "$SHADOW/" ;; esac
