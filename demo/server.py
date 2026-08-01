@@ -91,6 +91,15 @@ VARIANTS = {
         "prompt_modes": ["prompt_image_to_svg"],
         "default_mode": "prompt_image_to_svg",
     },
+    # GLM-OCR served in-process via transformers (the vLLM path doesn't run on
+    # this host's driver). A separate demo instance on GPU1, linked to the
+    # dots.mocr demo through the peer-link in the header (DEMO_PEER_PORT).
+    "glm": {
+        "title": "GLM-OCR — document recognition",
+        "prompt_modes": model_registry.GLM_PROMPT_MODES,
+        "default_mode": "glm_text_recognition",
+        "model_id": "glm_ocr",
+    },
 }
 if VARIANT not in VARIANTS:
     raise SystemExit(f"unknown DEMO_VARIANT: {VARIANT}")
@@ -113,9 +122,13 @@ def _make_worker():
     # Model selector: when several models are deployed side by side (DEMO_MODEL_SELECTOR=1
     # or DEMO_MODEL set), the worker resolves engine/url/model lazily from the
     # registry (demo/models.py) at load time instead of the constructor args.
+    # The `glm` variant pins itself to the glm_ocr registry entry (in-process
+    # transformers), so it shows up as its own demo with the peer link to dots.
     # Legacy single-model deploys leave these unset and keep the old behavior.
     model_id = None
-    if (os.environ.get("DEMO_MODEL_SELECTOR") == "1"
+    if VARIANTS.get(VARIANT, {}).get("model_id"):
+        model_id = VARIANTS[VARIANT]["model_id"]
+    elif (os.environ.get("DEMO_MODEL_SELECTOR") == "1"
             or os.environ.get("DEMO_MODEL")):
         model_id = model_registry.default_model_id()
     return DemoWorker(

@@ -78,12 +78,27 @@ def _build_models():
             vllm_url=url, vllm_model=model, device="vllm", dtype="auto", **common,
         )
 
-    def _glm_factory(url, model, common):
-        from dots_mocr.model.glm_parser import GlmOcrVllmParser
+    def _glm_factory(url, model, common, engine):
+        # vLLM is the fast path; on hosts where a current vLLM build cannot run
+        # (CUDA/driver mismatch — common on a 4090 with an older toolkit), GLM-OCR
+        # still serves through transformers in-process. Same artifacts either way.
+        if engine == "vllm":
+            from dots_mocr.model.glm_parser import GlmOcrVllmParser
 
-        return GlmOcrVllmParser(
-            vllm_url=url, vllm_model=model, device="vllm", dtype="auto", **common,
+            return GlmOcrVllmParser(
+                vllm_url=url, vllm_model=model, device="vllm", dtype="auto", **common,
+            )
+        from dots_mocr.model.glm_transformers import GlmOcrTransformersParser
+
+        return GlmOcrTransformersParser(
+            device=os.environ.get("DEMO_GLM_DEVICE") or "auto",
+            dtype="bfloat16", attn_implementation="sdpa", **common,
         )
+
+    # GLM engine: vllm when a compatible server is up, else transformers
+    # (the only path that works on this host's driver/toolkit). One knob so the
+    # same registry serves a vLLM-capable box and this one.
+    glm_engine = os.environ.get("DEMO_GLM_ENGINE", "transformers")
 
     return {
         "dots_mocr": {
@@ -98,13 +113,15 @@ def _build_models():
         },
         "glm_ocr": {
             "label": "GLM-OCR (0.9B)",
-            "engine": "vllm",
+            "engine": glm_engine,
+            # only used by the vllm branch of _glm_factory
             "vllm_url": os.environ.get("DEMO_VLLM_URL_GLM") or "http://127.0.0.1:8001/v1",
             "vllm_model": os.environ.get("DEMO_VLLM_MODEL_GLM") or "glm-ocr",
             "vllm_container": os.environ.get("DEMO_VLLM_CONTAINER_GLM") or "glm_vllm",
             "prompt_modes": GLM_PROMPT_MODES,
             "default_mode": "glm_text_recognition",
-            "parser_factory": _glm_factory,
+            "parser_factory": lambda url=None, model=None, common=None:
+                _glm_factory(url, model, common, glm_engine),
         },
     }
 

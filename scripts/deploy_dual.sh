@@ -1,18 +1,16 @@
 #!/usr/bin/env bash
-# Deploy BOTH models hot on their own GPUs + the model-selector demo.
-#
-# This is the dual-model counterpart of deploy_server.sh: dots.mocr's vLLM on
-# GPU0 and GLM-OCR's vLLM on GPU1, plus the demo with DEMO_MODEL_SELECTOR=1 so
-# the UI shows a dropdown to flip between them. Switching is instant — both
-# servers stay up, the worker just repoints.
+# Deploy dots.mocr (vLLM, GPU0) AND GLM-OCR (transformers, GPU1) as two demos,
+# cross-linked by the peer-link in each header.
 #
 #   CKPT=/path/to/dots.mocr STATE=/path/to/state scripts/deploy_dual.sh
 #   scripts/deploy_dual.sh --down
 #
-# Prereqs (auto-handled here):
-#   * dots.mocr checkpoint with auto_map stripped (deploy_server.sh's shadow
-#     rebuilds it for vLLM) — same as the single-model path.
-#   * GLM-OCR downloaded into $GLM_HF_CACHE (downloaded on first run).
+# Why two demos, not one with a selector: GLM-OCR cannot run on this host's vLLM
+# (driver/toolkit/CUDA mismatch — see docker/compose.server.yml), so it serves
+# in-process via transformers. That needs a GPU in the demo container itself,
+# which dots.mocr's vLLM-backed demo does not have. Two single-model demos each
+# on their own GPU, linked to each other, keeps both hot and lets you parse the
+# same document with each to compare quality and speed.
 set -Eeuo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -21,13 +19,13 @@ COMPOSE="$ROOT/docker/compose.server.yml"
 CKPT="${CKPT:-${CKPTDIR:-${DOTS_MOCR_CKPT:-}}}"
 STATE="${STATE:-${DEMO_STATE_DIR:-$ROOT/server_state}}"
 DEMO_PORT="${DEMO_PORT:-8601}"
+GLM_DEMO_PORT="${GLM_DEMO_PORT:-8602}"
 VLLM_PORT="${VLLM_PORT:-8000}"
-GLM_VLLM_PORT="${GLM_VLLM_PORT:-8001}"
 BIND="${DOTS_MOCR_BIND:-127.0.0.1}"
-# Where GLM-OCR's HF cache lives. /mnt/data2/PMRepnikov is the documented
-# "write big stuff here" spot on this host; the home volume is small and was
-# wiped once during this work, so do NOT default to ~/.cache.
+# GLM-OCR HF cache. /mnt/data2/PMRepnikov is the documented "write big here"
+# spot; the home volume is small and was wiped once during this work.
 GLM_HF_CACHE="${GLM_HF_CACHE:-/mnt/data2/PMRepnikov/glm_ocr/hfhub}"
+GLM_STATE_DIR="${GLM_STATE_DIR:-$STATE-glm}"
 GLM_MODEL_ID="${GLM_MODEL_ID:-zai-org/GLM-OCR}"
 
 if [[ "${1:-}" == "--down" ]]; then
@@ -39,8 +37,8 @@ if [[ "${1:-}" == "--down" ]]; then
 fi
 
 [[ -n "$CKPT" && -d "$CKPT" ]] || { echo "CKPT must point at the dots.mocr snapshot" >&2; exit 2; }
-mkdir -p "$STATE" "$GLM_HF_CACHE"
-chmod -R a+rwX "$STATE" 2>/dev/null || true
+mkdir -p "$STATE" "$GLM_HF_CACHE" "$GLM_STATE_DIR"
+chmod -R a+rwX "$STATE" "$GLM_STATE_DIR" 2>/dev/null || true
 CKPT=$(cd "$CKPT" && pwd -P)
 STATE=$(cd "$STATE" && pwd -P)
 
@@ -67,24 +65,19 @@ print(snapshot_download("$GLM_MODEL_ID", cache_dir="$GLM_HF_CACHE"))
 PY
     GLM_SNAPSHOT="$(find "$GLM_HF_CACHE/models--zai-org--GLM-OCR/snapshots" -mindepth 1 -maxdepth 1 -type d | head -1)"
 fi
-GLM_SNAPSHOT=$(cd "$GLM_SNAPSHOT" && pwd -P)
-echo "  GLM-OCR snapshot: $GLM_SNAPSHOT"
-# The compose file mounts the cache root at /hf (so the snapshot's symlinks into
-# ../../blobs/ resolve), and vLLM needs the model path FROM INSIDE the container.
+# Path to the snapshot FROM INSIDE the container (the cache root is at /hf, so
+# the snapshot's symlinks into ../../blobs/ resolve).
 GLM_CKPT="/hf/${GLM_SNAPSHOT#"$GLM_HF_CACHE/"}"
-export GLM_CKPT
+echo "  GLM-OCR snapshot (in-container): $GLM_CKPT"
 
 export REPO_ROOT="$ROOT" CKPT_DIR="$CKPT" STATE_DIR="$STATE"
-export VLLM_CKPT_SHADOW="$SHADOW" DEMO_PORT VLLM_PORT GLM_VLLM_PORT
+export VLLM_CKPT_SHADOW="$SHADOW" DEMO_PORT VLLM_PORT GLM_DEMO_PORT
 export DEMO_HOST="$BIND"
-export GLM_CKPT_DIR="$GLM_HF_CACHE"     # mounted read-only; snapshot resolved inside
-export DEMO_MODEL_SELECTOR=1
-export DEMO_DUAL=1
+export GLM_CKPT_DIR="$GLM_HF_CACHE" GLM_CKPT GLM_STATE_DIR
 
 echo "deploying dual-model stack from $ROOT"
-echo "  dots.mocr ckpt : $CKPT  (GPU0 -> 127.0.0.1:${VLLM_PORT})"
-echo "  GLM-OCR cache  : $GLM_HF_CACHE  (GPU1 -> 127.0.0.1:${GLM_VLLM_PORT})"
-echo "  demo           : ${BIND}:${DEMO_PORT}"
+echo "  dots.mocr : GPU0  vLLM 127.0.0.1:${VLLM_PORT}  demo ${BIND}:${DEMO_PORT}"
+echo "  GLM-OCR  : GPU1  transformers (in-process)  demo ${BIND}:${GLM_DEMO_PORT}"
 docker compose -f "$COMPOSE" --profile dual up -d
 
 wait_for() {  # <url> <needle> <name> <tries>
@@ -98,13 +91,14 @@ wait_for() {  # <url> <needle> <name> <tries>
 }
 wait_for "http://127.0.0.1:${VLLM_PORT}/v1/models" "${VLLM_MODEL_NAME:-rednote-hilab/dots.mocr}" "dots.mocr vLLM" || {
     echo "dots.mocr vLLM did not come up; docker compose logs vllm" >&2; exit 1; }
-wait_for "http://127.0.0.1:${GLM_VLLM_PORT}/v1/models" "${GLM_MODEL_NAME:-glm-ocr}" "GLM-OCR vLLM" 60 || {
-    echo "GLM-OCR vLLM did not come up; docker compose logs glm_vllm" >&2; exit 1; }
-wait_for "http://127.0.0.1:${DEMO_PORT}/healthz" '"worker_alive":true' "demo" 30 || {
-    echo "demo did not come up; docker compose logs demo" >&2; exit 1; }
+wait_for "http://127.0.0.1:${DEMO_PORT}/healthz" '"worker_alive":true' "dots.mocr demo" 30 || {
+    echo "dots.mocr demo did not come up; docker compose logs demo" >&2; exit 1; }
+wait_for "http://127.0.0.1:${GLM_DEMO_PORT}/healthz" '"worker_alive":true' "GLM-OCR demo" 30 || {
+    echo "GLM-OCR demo did not come up; docker compose logs demo_glm" >&2; exit 1; }
 
 echo
 echo "=== ready ==="
-echo "open the demo through a tunnel and flip the model dropdown:"
-echo "  ssh -N -L ${DEMO_PORT}:127.0.0.1:${DEMO_PORT} <server>"
-echo "  then http://127.0.0.1:${DEMO_PORT}"
+echo "open both demos through a tunnel and compare:"
+echo "  ssh -N -L ${DEMO_PORT}:127.0.0.1:${DEMO_PORT} -L ${GLM_DEMO_PORT}:127.0.0.1:${GLM_DEMO_PORT} <server>"
+echo "  dots.mocr : http://127.0.0.1:${DEMO_PORT}"
+echo "  GLM-OCR  : http://127.0.0.1:${GLM_DEMO_PORT}   (peer link in either header)"

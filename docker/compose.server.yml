@@ -59,68 +59,67 @@ services:
       retries: 30
       start_period: 180s
 
-  # Second model, hot on its own GPU. dots.mocr (dots_ocr + auto_map) only
-  # loads on the older vLLM the `vllm` service pins, while GLM-OCR (native
-  # glm_ocr in transformers 5.x) needs a current vLLM build — so they cannot
-  # share one server. On a 2x4090 host each model gets a card, the demo's model
-  # selector repoints the worker between them, and switching is instant (no
-  # weight reload). Gated by DEMO_DUAL=1: unset, the whole service is skipped
-  # and a single-model deploy is unchanged.
-  glm_vllm:
-    # vLLM 0.25.1 + transformers 5.13.1 on a CUDA-12.4 base. The official
-    # vllm/vllm-openai cu129/13 tags are refused by this host's
-    # nvidia-container-toolkit (legacy mode, cuda>=12.9 unsatisfied), but a
-    # CUDA-12.4 image runs fine on the same driver. This image is the one
-    # already present on the server; override with GLM_VLLM_IMAGE if needed.
-    image: ${GLM_VLLM_IMAGE:-qwen3-vllm:cu124}
-    container_name: ${GLM_VLLM_CONTAINER:-glm_vllm}
+  # Second demo instance for GLM-OCR, served in-process via transformers.
+  # Why not vLLM: no public vLLM build runs GLM-OCR on this host's driver — the
+  # cu13 images are refused by nvidia-container-toolkit (legacy mode), the cu124
+  # image's torch errors "driver too old", and a hand-built cu126 vLLM (>=0.26)
+  # links libcudart.so.13. GLM-OCR is a native transformers architecture, so
+  # the model-card path (AutoModelForImageTextToText) works on the cu126 stack
+  # dots.mocr's transformers engine already runs on — verified: 1.3s load,
+  # correct recognition output on a 4090. Gated by the `dual` profile.
+  #
+  # Two demo instances (dots on GPU0 via vLLM, GLM on GPU1 in-process) linked
+  # by the peer-link in the header: parse the same doc with each and compare.
+  demo_glm:
+    image: ${GLM_DEMO_IMAGE:-dots-mocr:bench-cu126}
+    container_name: ${GLM_DEMO_CONTAINER:-glm_demo}
     restart: unless-stopped
+    init: true
     ipc: host
     profiles: ["dual"]
-    # qwen3-vllm:cu124 has no vLLM entrypoint baked in, so invoke the server
-    # module explicitly. NOTE: the api_server module takes --model <path>, not
-    # a positional model arg (only the `vllm serve` CLI does) — a positional
-    # path here is silently ignored and vLLM falls back to a repo download.
-    entrypoint: ["python3", "-m", "vllm.entrypoints.openai.api_server"]
-    command:
-      # Path inside the container to the snapshot (the cache root is at /hf).
-      - --model=${GLM_CKPT:-/hf/models--zai-org--GLM-OCR/snapshots/main}
-      - --served-model-name=${GLM_MODEL_NAME:-glm-ocr}
-      - --gpu-memory-utilization=${GLM_GPU_UTIL:-0.85}
-      - --max-model-len=${GLM_MAX_MODEL_LEN:-32768}
-      # MTP speculative decode (model card) speeds up autoregression; cheap to
-      # try, compared in reports/ after the run.
-      - --speculative-config=${GLM_SPEC_CONFIG:-{"method":"mtp","num_speculative_tokens":3}}
-      - --enable-sleep-mode
-      - --host=0.0.0.0
-      - --port=8000
+    network_mode: host
+    command: ["python3", "-m", "demo.server"]
+    working_dir: /opt/dots-mocr
     environment:
+      # variant=glm -> server.py pins the worker to the glm_ocr registry entry
+      # (in-process transformers). No vLLM URL needed.
+      DEMO_VARIANT: glm
+      DEMO_STATE_DIR: /state
+      DEMO_GLM_ENGINE: transformers
+      DEMO_GLM_DEVICE: ${GLM_DEMO_DEVICE:-cuda:0}
+      DEMO_AUTOSTART: "0"
+      DEMO_IDLE_UNLOAD_S: ${DEMO_IDLE_UNLOAD_S:-180}
+      # GLM-OCR checkpoint: the HF cache root is at /hf (so the snapshot's
+      # symlinks into ../../blobs/ resolve); CKPTDIR points at the snapshot.
+      CKPTDIR: ${GLM_CKPT:-/hf/models--zai-org--GLM-OCR/snapshots/main}
+      PORT: ${GLM_DEMO_PORT:-8602}
+      DEMO_HOST: ${DEMO_HOST:-127.0.0.1}
+      DOTS_MOCR_WEB_PORT: ${GLM_DEMO_PORT:-8602}
+      # cross-link the two demos: each shows the other in its header.
+      DEMO_PEER_PORT: ${DEMO_PORT:-8601}
+      DEMO_PEER_TITLE: "dots.mocr"
+      PYTHONPATH: /opt/dots-mocr/src:/opt/dots-mocr
+      HOME: /tmp
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
-      HF_HOME: /tmp/hf
-      VLLM_SERVER_DEV_MODE: "1"
-    ports:
-      - "127.0.0.1:${GLM_VLLM_PORT:-8001}:8000"
     volumes:
-      # Mount the WHOLE HF cache root, not just the snapshot dir: the snapshot
-      # holds symlinks into ../../blobs/, so mounting only snapshots/ leaves
-      # config.json and model.safetensors as broken links and vLLM falls back
-      # to a (offline-disabled) snapshot_download that then fails.
-      - ${GLM_CKPT_DIR:?set by deploy_dual.sh}:/hf:ro
-      - /mnt:/mnt:ro
+      - ${REPO_ROOT:?set by deploy script}:/opt/dots-mocr:ro
+      - ${GLM_CKPT_DIR:?set by deploy script}:/hf:ro
+      - ${GLM_STATE_DIR:-${STATE_DIR:-/nonexistent}-glm}:/state
+      - /var/run/docker.sock:/var/run/docker.sock
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["${GLM_VLLM_GPU:-1}"]
+              device_ids: ["${GLM_DEMO_GPU:-1}"]
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8000/health || exit 1"]
-      interval: 10s
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:${GLM_DEMO_PORT:-8602}/healthz || exit 1"]
+      interval: 30s
       timeout: 5s
-      retries: 30
-      start_period: 180s
+      retries: 3
+      start_period: 60s
 
   demo:
     image: ${DOTS_MOCR_IMAGE:-dots-mocr:trtllm-1.3.0rc20}
@@ -156,6 +155,10 @@ services:
       DEMO_VLLM_URL_GLM: http://127.0.0.1:${GLM_VLLM_PORT:-8001}/v1
       DEMO_VLLM_MODEL_GLM: ${GLM_MODEL_NAME:-glm-ocr}
       DEMO_VLLM_CONTAINER_GLM: ${GLM_VLLM_CONTAINER:-glm_vllm}
+      # When the dual profile is up, the GLM-OCR demo runs on GLM_DEMO_PORT;
+      # surface it as a peer link in this demo's header.
+      DEMO_PEER_PORT: ${GLM_DEMO_PORT:-8602}
+      DEMO_PEER_TITLE: "GLM-OCR"
       PORT: ${DEMO_PORT:-8601}
       DEMO_HOST: ${DEMO_HOST:-127.0.0.1}
       DOTS_MOCR_WEB_PORT: ${DEMO_PORT:-8601}
