@@ -226,14 +226,9 @@ DeviceTensor VisionTower::forward(const float* pixel_values_host, int N_v,
         cast_f32_to_bf16(f32buf.ptr, x_bf16.ptr(), (size_t)N_v * patch_vec);
     }
     DeviceTensor hidden(Dtype::BF16, N_v, E);
-    // GEMM: C = x_bf16 @ proj_w^T   -> [N_v, 1536]
-    //   A = x_bf16 [N_v, 588], B = proj_w [1536, 588], we want B @ A^T? No:
-    //   PyTorch Linear: out = x @ W^T, W is [out,in]=[1536,588]. So:
-    //   out[n,o] = sum_i x[n,i] * W[o,i]  => C = x @ W^T.
-    //   cublas_bf16_gemm(A, transA=false, B, transB=true, ...) with A=[N_v,588],
-    //   B=[1536,588] transposed gives [N_v,1536]. But our helper takes (A,B,C)
-    //   with row-major semantics: C = op(A)*op(B). We want A=[N_v,588] (no trans),
-    //   B=[1536,588] (trans). 
+    // Patch-embed conv as a GEMM: out = x @ W^T  (PyTorch Linear semantics:
+    // W is [out,in]=[1536,588], so out[n,o] = sum_i x[n,i]*W[o,i]). Runs on the
+    // WMMA tensor-core tc_gemm with the conv bias fused into the epilogue.
     tc_gemm(x_bf16.ptr(), false,
             w_->proj_w, true,
             hidden.ptr(),
