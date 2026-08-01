@@ -26,7 +26,6 @@ if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
 endif()
 set(CMAKE_CUDA_STANDARD 17)
 
-option(DOTS_ENABLE_CUBLAS "Use cuBLAS for GEMM (recommended)" ON)
 option(DOTS_BUILD_TESTS   "Build regression/unit tests"        ON)
 
 # ---- dependencies (all header-only, vendored) --------------------------------
@@ -45,6 +44,7 @@ add_library(dots_mocr_engine STATIC
     src/image_preproc.cpp
     src/cuda_check.cu
     src/kernels.cu
+    src/tc_gemm.cu
     src/attention.cu
     src/vision_tower.cu
     src/llm.cu
@@ -56,14 +56,10 @@ target_include_directories(dots_mocr_engine PUBLIC
 )
 target_compile_features(dots_mocr_engine PUBLIC cxx_std_17)
 
-if(DOTS_ENABLE_CUBLAS)
-    find_package(CUDAToolkit REQUIRED)
-    target_link_libraries(dots_mocr_engine PUBLIC CUDA::cublas CUDA::cudart)
-    target_compile_definitions(dots_mocr_engine PUBLIC DOTS_USE_CUBLAS=1)
-else()
-    find_package(CUDAToolkit REQUIRED COMPONENTS cudart)
-    target_link_libraries(dots_mocr_engine PUBLIC CUDA::cudart)
-endif()
+# No cuBLAS / cuBLASLt: every contraction is our own WMMA tensor-core kernel
+# (tc_gemm.cu, attention.cu). We only need the CUDA runtime.
+find_package(CUDAToolkit REQUIRED COMPONENTS cudart)
+target_link_libraries(dots_mocr_engine PUBLIC CUDA::cudart)
 
 target_link_libraries(dots_mocr_engine PUBLIC nlohmann_json stb)
 

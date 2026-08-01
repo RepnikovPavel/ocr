@@ -17,30 +17,9 @@
 
 namespace dots {
 
-// ---- cuBLAS handle ----------------------------------------------------------
-struct cublasHandle;
-cublasHandle* cublas_handle_get();
-void          cublas_handle_destroy();
-
-// cuBLAS bf16 GEMM:  C = alpha * op(A) * op(B) + beta * C
-//   A: [M, K] if transA=false else [K, M]   (bf16)
-//   B: [K, N] if transB=false else [N, K]   (bf16)
-//   C: [M, N]                                (bf16)
-// cuBLAS is column-major; we keep row-major tensors and flip the call so the
-// math is identical (C^T = B^T A^T). transA/transB refer to the row-major view.
-void cublas_bf16_gemm(const void* A, bool transA,
-                      const void* B, bool transB,
-                      void* C,
-                      int M, int N, int K,
-                      float alpha = 1.0f, float beta = 0.0f,
-                      int lda = 0, int ldb = 0, int ldc = 0);
-
-// Batched GEMM for grouped-qkv-style calls (used by nothing currently, kept
-// for the attention-block fused path if we add it).
-void cublas_bf16_gemm_batched(const void* const* A, bool transA,
-                              const void* const* B, bool transB,
-                              void* const* C,
-                              int M, int N, int K, int batch);
+// (cuBLAS is no longer used — all GEMMs go through the hand-written tensor-core
+// tc_gemm in tc_gemm.h. The elementwise/reduction kernels below remain scalar
+// CUDA-core math: they are bandwidth-bound glue, not contractions.)
 
 // ---- elementwise / fused kernels -------------------------------------------
 

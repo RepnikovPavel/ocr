@@ -1,6 +1,5 @@
 #include "tensor.h"
 
-#include <cublas_v2.h>
 #include <cstdio>
 #include <cstdlib>
 
@@ -49,25 +48,6 @@ DeviceTensor::DeviceTensor(Dtype dt, int r, int c)
 
 Tensor DeviceTensor::view() {
     return Tensor(buf.ptr, dtype, rows, cols, ld);
-}
-
-// ---- cublas -----------------------------------------------------------------
-
-void cublas_check_(cublasStatus_t s, const char* file, int line) {
-    const char* msg = "unknown cublas error";
-    switch (s) {
-        case CUBLAS_STATUS_SUCCESS: return;
-        case CUBLAS_STATUS_NOT_INITIALIZED: msg = "not initialized"; break;
-        case CUBLAS_STATUS_ALLOC_FAILED:   msg = "alloc failed"; break;
-        case CUBLAS_STATUS_INVALID_VALUE:  msg = "invalid value"; break;
-        case CUBLAS_STATUS_ARCH_MISMATCH:  msg = "arch mismatch"; break;
-        case CUBLAS_STATUS_MAPPING_ERROR:  msg = "mapping error"; break;
-        case CUBLAS_STATUS_EXECUTION_FAILED: msg = "execution failed"; break;
-        case CUBLAS_STATUS_INTERNAL_ERROR: msg = "internal error"; break;
-        default: break;
-    }
-    fprintf(stderr, "cuBLAS error at %s:%d: %s\n", file, line, msg);
-    std::abort();
 }
 
 int current_device() { int d = 0; DOTS_CUDA_CHECK(cudaGetDevice(&d)); return d; }

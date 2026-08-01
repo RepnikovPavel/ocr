@@ -6,12 +6,11 @@
 //   - element-wise (SiLU, GELU, SwiGLU, add, embed gather): grid-stride loop,
 //     bf16 vectorised as bf16x2 where the access is aligned.
 //
-// We keep these deliberately simple: the FLOP-heavy work is GEMM (cuBLAS) and
-// attention (attention.cu). These kernels are bandwidth-bound glue, and the
-// launch geometry below saturates HBM at the sizes we run.
+// These are the bandwidth-bound glue between the tensor-core GEMMs (tc_gemm.cu)
+// and attention (attention.cu). cuBLAS is no longer linked — all contractions
+// are our own WMMA kernels.
 #include "kernels.h"
 
-#include <cublas_v2.h>
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
 
@@ -19,83 +18,6 @@
 #include <cmath>
 
 namespace dots {
-
-// ====================== cuBLAS handle + bf16 GEMM ============================
-
-static cublasHandle_t g_handle = nullptr;
-cublasHandle* cublas_handle_get() {
-    if (!g_handle) {
-        cublasCreate(&g_handle);
-        cublasSetMathMode(g_handle, CUBLAS_DEFAULT_MATH);
-    }
-    return (cublasHandle*)g_handle;
-}
-void cublas_handle_destroy() {
-    if (g_handle) { cublasDestroy(g_handle); g_handle = nullptr; }
-}
-
-// Row-major bf16 GEMM via cuBLAS (which is column-major).
-//
-// We want, with row-major operands:
-//     C[M,N] = alpha * op_A(A) * op_B(B) + beta * C
-// where op_A(A) is [M,K] (transA=false) or [K,M] (transA=true), and similarly
-// op_B(B) is [K,N] / [N,K]. A,B,C are stored row-major with leading dim =
-// number of columns of the *stored* (non-op'd) matrix.
-//
-// cuBLAS computes, in column-major, C = op(Acub) * op(Bcub). The identity we
-// use: the row-major product C = A*B equals the column-major product C^T = B^T*A^T.
-// So we swap the operand order and transpose each op flag:
-//     cublasGemmEx(h, op_B(B), op_A(A), N, M, K, ..., C, ldc=N)
-// with leading dims = the stored row stride (cols) of each operand.
-void cublas_bf16_gemm(const void* A, bool transA,
-                      const void* B, bool transB,
-                      void* C,
-                      int M, int N, int K,
-                      float alpha, float beta,
-                      int lda_in, int ldb_in, int ldc_in) {
-    cublasHandle_t h = (cublasHandle_t)cublas_handle_get();
-    // Stored leading dims (row strides) of the row-major operands.
-    //   A is stored as [rows_A, cols_A]; its row stride is cols_A.
-    //   transA=false: A is [M,K]    -> lda = K
-    //   transA=true : A is [K,M]    -> lda = M
-    int lda = lda_in ? lda_in : (transA ? M : K);
-    int ldb = ldb_in ? ldb_in : (transB ? K : N);
-    int ldc = ldc_in ? ldc_in : N;   // C stored [M,N] -> row stride N
-    // In the col-major call the first operand is B, the second is A; op flags
-    // flip because of the transpose identity above.
-    cublasOperation_t opB = transB ? CUBLAS_OP_T : CUBLAS_OP_N;
-    cublasOperation_t opA = transA ? CUBLAS_OP_T : CUBLAS_OP_N;
-    cublasStatus_t st = cublasGemmEx(
-        h,
-        opB, opA,
-        N, M, K,                 // col-major result is [N,M] == row-major [M,N]
-        &alpha,
-        B, CUDA_R_16BF, ldb,
-        A, CUDA_R_16BF, lda,
-        &beta,
-        C, CUDA_R_16BF, ldc,
-        CUBLAS_COMPUTE_32F,
-        CUBLAS_GEMM_DEFAULT);
-    DOTS_CUBLAS_CHECK(st);
-}
-
-void cublas_bf16_gemm_batched(const void* const* A, bool transA,
-                              const void* const* B, bool transB,
-                              void* const* C,
-                              int M, int N, int K, int batch) {
-    cublasHandle_t h = (cublasHandle_t)cublas_handle_get();
-    cublasOperation_t opB = transB ? CUBLAS_OP_T : CUBLAS_OP_N;
-    cublasOperation_t opA = transA ? CUBLAS_OP_T : CUBLAS_OP_N;
-    float alpha = 1.0f, beta = 0.0f;
-    cublasStatus_t st = cublasGemmBatchedEx(
-        h, opB, opA, N, M, K, &alpha,
-        B, CUDA_R_16BF, transB ? N : K,
-        A, CUDA_R_16BF, transA ? M : K,
-        &beta,
-        C, CUDA_R_16BF, N, batch,
-        CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
-    DOTS_CUBLAS_CHECK(st);
-}
 
 // ============================ RMSNorm ========================================
 // One block per row. dim <= 1024 (our dims are 1536 and 4224, head_dim 128),

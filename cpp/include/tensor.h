@@ -10,7 +10,6 @@
 
 #include <cuda_runtime.h>
 #include <cuda_bf16.h>
-#include <cublas_v2.h>
 #include <cstdint>
 #include <cstddef>
 #include <memory>
@@ -111,9 +110,6 @@ struct DeviceTensor {
             std::abort();                                                      \
         }                                                                      \
     } while (0)
-
-#define DOTS_CUBLAS_CHECK(expr) dots::cublas_check_((expr), __FILE__, __LINE__)
-void cublas_check_(cublasStatus_t s, const char* file, int line);
 
 // ---- misc device helpers -----------------------------------------------------
 template <typename T>

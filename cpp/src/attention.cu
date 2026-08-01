@@ -1,88 +1,181 @@
-// Flash-style attention kernels. See attention.h for the design notes.
+// Flash-attention on tensor cores (nvcuda::wmma), with the online softmax kept
+// scalar in the score tile. See attention.h.
 //
-// This version is optimised for *latency of the first end-to-end run* rather
-// than peak throughput: each (query row, head) is handled by one warp that
-// streams over all keys, computing scores and the weighted V sum in registers
-// with a warp-shuffle dot product. The online-softmax keeps memory O(seq)
-// instead of O(seq^2) — the same property that lets vision attention fit at
-// N_v ~ 11k. The prefill (causal) and vision (full) paths share the kernel;
-// only the per-pair validity test differs.
+// One CTA computes a BR-row tile of the output for a single head. It streams
+// over K/V in BC-row chunks. Per chunk:
+//   1) S = Q_tile · K_tile^T           -- WMMA GEMM, [BR,BC] fp32 scores
+//   2) online softmax over S (row max, exp, running sum)  -- scalar
+//   3) rescale O accumulator, then O += P_tile · V_tile   -- WMMA GEMM
+// The two contractions (QK^T and PV) are the compute-heavy parts and run on
+// tensor cores; the softmax exp/max/sum is scalar (transcendentals are not
+// expressible as MMA). Memory stays O(seq) — the seq×seq score matrix is never
+// materialised in HBM, only the BR×BC tile in shared/registers.
+//
+// head_dim is fixed at 128; BR=BC=16 keep shared memory under the 48 KB
+// default cap. is_causal masks the upper triangle on the LLM prefill path.
+//
+// q,k,v layout: [seq, n_heads, head_dim] row-major (head axis inside seq), so
+// head h of token t is contiguous [head_dim] at offset (t*n_heads+h)*head_dim.
 #include "attention.h"
-
-#include <cuda_bf16.h>
+#include "kernels.h"
 #include <cuda_runtime.h>
-
+#include <cuda_bf16.h>
+#include <mma.h>
 #include <cstdio>
 
 namespace dots {
+using namespace nvcuda;
 
-// One warp per (q_row, head). Each lane owns head_dim/32 = 4 elements of the
-// dot product. The warp loops over keys, accumulates an online softmax and a
-// running weighted-V vector (in registers, 4 floats/lane over head_dim=128).
+constexpr int HD = 128;
+constexpr int BR = 16;     // query tile rows
+constexpr int BC = 16;     // key/value tile rows
+constexpr int WARPS = 4;   // warps per CTA
+
 template <int HEAD_DIM>
-__global__ void flash_attn_kernel(const bf16* __restrict__ q,
-                                  const bf16* __restrict__ k,
-                                  const bf16* __restrict__ v,
-                                  bf16* __restrict__ out,
-                                  int seq, int n_heads, int head_dim,
-                                  bool is_causal) {
+__global__ void __launch_bounds__(WARPS * 32)
+flash_attn_kernel(const bf16* __restrict__ q,
+                  const bf16* __restrict__ k,
+                  const bf16* __restrict__ v,
+                  bf16* __restrict__ out,
+                  int seq, int n_heads, int head_dim,
+                  bool is_causal) {
     (void)head_dim;
-    constexpr int LANES = 32;
-    constexpr int PER = HEAD_DIM / LANES;     // 4 for hd=128
+    int q_base = blockIdx.x * BR;
+    int head   = blockIdx.y;
+    if (q_base >= seq || head >= n_heads) return;
     const float scale = 1.0f / sqrtf((float)HEAD_DIM);
 
-    int q_row = blockIdx.x;
-    int head  = blockIdx.y;
-    if (q_row >= seq || head >= n_heads) return;
+    extern __shared__ bf16 smem[];
+    bf16* sQ   = smem;                       // [BR, HD]
+    bf16* sK   = sQ + BR * HEAD_DIM;         // [BC, HD]
+    bf16* sV   = sK + BC * HEAD_DIM;         // [BC, HD]
+    bf16* sP   = sV + BC * HEAD_DIM;         // [BR, BC]
+    float* sS  = (float*)(sP + BR * BC);     // [BR, BC]
+    float* sO   = sS + BR * BC;              // [BR, HD]
+    float* m_row = sO + BR * HEAD_DIM;       // [BR]
+    float* l_row = m_row + BR;               // [BR]
 
-    int lane = threadIdx.x;   // 0..31 within the single warp (blockDim.x == 32)
-    const bf16* q_row_ptr = q + ((size_t)q_row * n_heads + head) * HEAD_DIM;
-    // Load this lane's slice of q into registers.
-    float qv[PER];
-    #pragma unroll
-    for (int p = 0; p < PER; ++p) qv[p] = __bfloat162float(q_row_ptr[lane * PER + p]);
+    int tid = threadIdx.x;
+    int warp = tid / 32;
 
-    // Running softmax + weighted V accumulator (this lane's 4-dim slice).
-    float m_prev = -INFINITY;
-    float l_prev = 0.0f;
-    float acc[PER];
-    #pragma unroll
-    for (int p = 0; p < PER; ++p) acc[p] = 0.0f;
+    // Load Q tile.
+    for (int i = tid; i < BR * HEAD_DIM; i += WARPS * 32) {
+        int r = i / HEAD_DIM, d = i % HEAD_DIM;
+        int qrow = q_base + r;
+        sQ[i] = (qrow < seq) ? q[((size_t)qrow * n_heads + head) * HEAD_DIM + d] : (bf16)0;
+    }
+    for (int i = tid; i < BR * HEAD_DIM; i += WARPS * 32) sO[i] = 0.0f;
+    for (int r = tid; r < BR; r += WARPS * 32) { m_row[r] = -INFINITY; l_row[r] = 0.0f; }
+    __syncthreads();
 
-    for (int kv = 0; kv < seq; ++kv) {
-        // Causal: query at q_row can only attend to keys at kv <= q_row.
-        if (is_causal && kv > q_row) break;
+    int n_kv_tiles = (seq + BC - 1) / BC;
+    int causal_last = is_causal ? (q_base + BR - 1) : (seq - 1);
 
-        // Score = dot(q, k_row) * scale, reduced across the warp.
-        const bf16* k_row_ptr = k + ((size_t)kv * n_heads + head) * HEAD_DIM;
-        float s = 0.0f;
-        #pragma unroll
-        for (int p = 0; p < PER; ++p) s += qv[p] * __bfloat162float(k_row_ptr[lane * PER + p]);
-        // warp reduce
-        for (int off = 16; off > 0; off >>= 1) s += __shfl_xor_sync(0xffffffff, s, off);
-        s *= scale;
+    // Output accumulator fragments: BR×HD tiled into BR/16 × HD/16 16×16 tiles.
+    // BR=16 so one row-tile; HD/16=8 col-tiles. Distribute col-tiles over warps.
+    constexpr int NT = HEAD_DIM / 16;     // 8
+    wmma::fragment<wmma::accumulator, 16, 16, 16, float> o_frag[NT];
+    for (int t = 0; t < NT; ++t) wmma::fill_fragment(o_frag[t], 0.0f);
 
-        // Online softmax: rescale previous accumulator and add this key's V.
-        float m_new = fmaxf(m_prev, s);
-        float exp_prev = expf(m_prev - m_new);   // rescale factor for prior terms
-        float exp_cur  = expf(s - m_new);
-        float l_new = l_prev * exp_prev + exp_cur;
+    for (int kb = 0; kb < n_kv_tiles; ++kb) {
+        int kv_base = kb * BC;
+        if (is_causal && kv_base > causal_last) break;
 
-        const bf16* v_row_ptr = v + ((size_t)kv * n_heads + head) * HEAD_DIM;
-        #pragma unroll
-        for (int p = 0; p < PER; ++p)
-            acc[p] = acc[p] * exp_prev + exp_cur * __bfloat162float(v_row_ptr[lane * PER + p]);
+        // Load K, V tiles.
+        for (int i = tid; i < BC * HEAD_DIM; i += WARPS * 32) {
+            int r = i / HEAD_DIM, d = i % HEAD_DIM;
+            int kvrow = kv_base + r;
+            bool ok = (kvrow < seq);
+            sK[i] = ok ? k[((size_t)kvrow * n_heads + head) * HEAD_DIM + d] : (bf16)0;
+            sV[i] = ok ? v[((size_t)kvrow * n_heads + head) * HEAD_DIM + d] : (bf16)0;
+        }
+        __syncthreads();
 
-        m_prev = m_new;
-        l_prev = l_new;
+        // ---- QK^T via WMMA: S[BR,BC] = Q[BR,HD]·K[BC,HD]^T ----
+        // BR=BC=16 -> one 16x16 output tile, computed by warp 0.
+        if (warp == 0) {
+            wmma::fragment<wmma::accumulator, 16, 16, 16, float> s_frag;
+            wmma::fill_fragment(s_frag, 0.0f);
+            for (int kt = 0; kt < HEAD_DIM / 16; ++kt) {
+                // matrix_a = Q slice [BR, 16] row_major, ld=HEAD_DIM, base sQ + kt*16
+                wmma::fragment<wmma::matrix_a, 16, 16, 16, bf16, wmma::row_major> a_frag;
+                wmma::load_matrix_sync(a_frag, sQ + kt * 16, HEAD_DIM);
+                // matrix_b = K^T slice [16, BC]: K is [BC,HD] row_major; its
+                // col_major view with ld=HEAD_DIM gives [HD,BC]=K^T. Load the
+                // kt-th 16-row block of that = K^T[kt*16.., :], base sK+kt*16.
+                wmma::fragment<wmma::matrix_b, 16, 16, 16, bf16, wmma::col_major> b_frag;
+                wmma::load_matrix_sync(b_frag, sK + kt * 16, HEAD_DIM);
+                wmma::mma_sync(s_frag, a_frag, b_frag, s_frag);
+            }
+            wmma::store_matrix_sync(sS, s_frag, BC, wmma::mem_row_major);
+        }
+        __syncthreads();
+
+        // Scale + causal/seq mask on the score tile.
+        for (int i = tid; i < BR * BC; i += WARPS * 32) {
+            int r = i / BC, c = i % BC;
+            int qrow = q_base + r, kvrow = kv_base + c;
+            float s = sS[i] * scale;
+            if (qrow >= seq || kvrow >= seq || (is_causal && kvrow > qrow)) s = -INFINITY;
+            sS[i] = s;
+        }
+        __syncthreads();
+
+        // Online softmax per Q row: block max, rescale O + running stats, P=exp.
+        for (int r = tid; r < BR; r += WARPS * 32) {
+            int qrow = q_base + r;
+            if (qrow >= seq) continue;
+            float m_block = -INFINITY;
+            for (int c = 0; c < BC; ++c) {
+                int kvrow = kv_base + c;
+                if (kvrow >= seq) continue;
+                if (is_causal && kvrow > qrow) continue;
+                if (sS[r * BC + c] > m_block) m_block = sS[r * BC + c];
+            }
+            float m_old = m_row[r];
+            float m_new = fmaxf(m_old, m_block);
+            float scale_o = expf(m_old - m_new);
+            float l_new = l_row[r] * scale_o;
+            for (int c = 0; c < BC; ++c) {
+                int kvrow = kv_base + c;
+                if (kvrow >= seq || (is_causal && kvrow > qrow)) { sP[r * BC + c] = (bf16)0; continue; }
+                float p = expf(sS[r * BC + c] - m_new);
+                l_new += p;
+                sP[r * BC + c] = __float2bfloat16(p);
+            }
+            for (int d = 0; d < HEAD_DIM; ++d) sO[r * HEAD_DIM + d] *= scale_o;
+            m_row[r] = m_new;
+            l_row[r] = l_new;
+        }
+        __syncthreads();
+
+        // ---- PV via WMMA: O[BR,HD] += P[BR,BC]·V[BC,HD] ----
+        // Distribute the HD/16 col-tiles across warps.
+        for (int t = warp; t < NT; t += WARPS) {
+            wmma::fragment<wmma::matrix_a, 16, 16, 16, bf16, wmma::row_major> p_frag;
+            wmma::load_matrix_sync(p_frag, sP, BC);
+            wmma::fragment<wmma::matrix_b, 16, 16, 16, bf16, wmma::row_major> v_frag;
+            wmma::load_matrix_sync(v_frag, sV + t * 16, HEAD_DIM);
+            wmma::mma_sync(o_frag[t], p_frag, v_frag, o_frag[t]);
+        }
+        __syncthreads();
     }
 
-    // Normalise and write this lane's slice of the output.
-    float inv_l = (l_prev > 0.0f) ? (1.0f / l_prev) : 0.0f;
-    bf16* out_row_ptr = out + ((size_t)q_row * n_heads + head) * HEAD_DIM;
-    #pragma unroll
-    for (int p = 0; p < PER; ++p)
-        out_row_ptr[lane * PER + p] = __float2bfloat16(acc[p] * inv_l);
+    // Dump o_frag[t] into the shared O tile (each warp owns its col-tiles).
+    for (int t = warp; t < NT; t += WARPS) {
+        wmma::store_matrix_sync(sO + t * 16, o_frag[t], HEAD_DIM, wmma::mem_row_major);
+    }
+    __syncthreads();
+
+    // Normalise by l, write bf16.
+    for (int i = tid; i < BR * HEAD_DIM; i += WARPS * 32) {
+        int r = i / HEAD_DIM;
+        int qrow = q_base + r;
+        if (qrow >= seq) continue;
+        float l = l_row[r];
+        float o = (l > 0.0f) ? (sO[i] / l) : 0.0f;
+        out[((size_t)qrow * n_heads + head) * HEAD_DIM + (i % HEAD_DIM)] = __float2bfloat16(o);
+    }
 }
 
 void flash_attention(const void* q, const void* k, const void* v, void* out,
@@ -92,21 +185,27 @@ void flash_attention(const void* q, const void* k, const void* v, void* out,
         fprintf(stderr, "[flash_attention] only head_dim=128 supported, got %d\n", head_dim);
         return;
     }
-    // One warp (32 threads) per (query row, head). The grid covers seq*n_heads
-    // work units; for the vision prefill at N_v~11k, n_heads=12 that is ~132k
-    // warps = ~4.2M threads, saturating the GPU.
-    dim3 grid(seq, n_heads);
-    dim3 block(32);
-    flash_attn_kernel<128><<<grid, block, 0, stream>>>(
+    dim3 grid((seq + BR - 1) / BR, n_heads);
+    dim3 block(WARPS * 32);
+    size_t shared = (BR*HD + BC*HD + BC*HD + BR*BC) * sizeof(bf16)
+                  + (BR*BC + BR*HD + BR + BR) * sizeof(float);
+    static bool cap_set = false;
+    if (!cap_set) {
+        cudaFuncSetAttribute((const void*)flash_attn_kernel<HD>,
+            cudaFuncAttributeMaxDynamicSharedMemorySize, 96 * 1024);
+        cap_set = true;
+    }
+    flash_attn_kernel<HD><<<grid, block, shared, stream>>>(
         (const bf16*)q, (const bf16*)k, (const bf16*)v, (bf16*)out,
-        seq, n_heads, 128, is_causal);
+        seq, n_heads, HD, is_causal);
     DOTS_CUDA_CHECK(cudaGetLastError());
 }
 
-// ---- Decode attention (T=1 over a KV-cache) --------------------------------
-// One warp per query head. The warp streams over `past` keys, computing scores
-// with a warp-shuffle dot product, an online softmax, and a weighted V sum.
-// GQA: query head h reads kv head h/g (g = n_heads / n_kv_heads).
+// ---- Decode attention (single query over KV-cache) ------------------------
+// T=1: the QK contraction is a GEMV [1,past] (M=1, memory-bound — not a natural
+// tensor-core shape). Kept as the scalar warp-reduce GEMV from the first pass;
+// moving this to TC would need padding past to a multiple of 16 and a batched
+// MMA across heads, which is future work. Documented in README.
 template <int HEAD_DIM>
 __global__ void decode_attn_kernel(const bf16* __restrict__ q,
                                    const bf16* __restrict__ k_cache,
@@ -128,7 +227,6 @@ __global__ void decode_attn_kernel(const bf16* __restrict__ q,
 
     const float scale = 1.0f / sqrtf((float)HEAD_DIM);
 
-    // Pass 1: find the max score (for numerical stability).
     float m_prev = -INFINITY;
     for (int r = 0; r < past; ++r) {
         const bf16* kr = k_cache + ((size_t)r * n_kv_heads + kv_head) * HEAD_DIM;
@@ -140,7 +238,6 @@ __global__ void decode_attn_kernel(const bf16* __restrict__ q,
         if (s > m_prev) m_prev = s;
     }
 
-    // Pass 2: exp, sum, and weighted V (online over rows; max is already final).
     float l_prev = 0.0f;
     float acc[PER];
     #pragma unroll

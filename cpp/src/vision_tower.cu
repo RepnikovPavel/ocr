@@ -9,6 +9,7 @@
 // All reused across the 42 blocks; peak ~ 600 MiB plus weights ~1.2 GiB.
 #include "vision_tower.h"
 #include "kernels.h"
+#include "tc_gemm.h"
 #include "attention.h"
 
 #include <cuda_runtime.h>
@@ -233,12 +234,11 @@ DeviceTensor VisionTower::forward(const float* pixel_values_host, int N_v,
     //   B=[1536,588] transposed gives [N_v,1536]. But our helper takes (A,B,C)
     //   with row-major semantics: C = op(A)*op(B). We want A=[N_v,588] (no trans),
     //   B=[1536,588] (trans). 
-    cublas_bf16_gemm(x_bf16.ptr(), false,
-                     w_->proj_w, true,
-                     hidden.ptr(),
-                     N_v, E, patch_vec,
-                     1.0f, 0.0f);
-    add_row_bias(hidden.ptr(), w_->proj_b, N_v, E);
+    tc_gemm(x_bf16.ptr(), false,
+            w_->proj_w, true,
+            hidden.ptr(),
+            N_v, E, patch_vec,
+            Epilog::BIAS, w_->proj_b);
     rms_norm(hidden.ptr(), w_->patch_norm_w, hidden.ptr(), N_v, E, cfg.rms_norm_eps);
 
     // 2) Build the RoPE freq table [N_v, 64] and upload.
@@ -267,8 +267,8 @@ DeviceTensor VisionTower::forward(const float* pixel_values_host, int N_v,
         // --- attention sublayer ---
         rms_norm(hidden.ptr(), B.norm1_w, normed.ptr(), N_v, E, cfg.rms_norm_eps);
         // qkv = normed @ qkv_w^T  -> [N_v, 4608]
-        cublas_bf16_gemm(normed.ptr(), false, B.qkv_w, true,
-                         qkv.ptr(), N_v, 3 * E, E);
+        tc_gemm(normed.ptr(), false, B.qkv_w, true,
+                qkv.ptr(), N_v, 3 * E, E, Epilog::NONE);
         // split qkv (interleaved [3, N_v, H, HD] -> [N_v, H, HD] each) and RoPE.
         split_qkv_vision(qkv.ptr(), qbuf.ptr(), kbuf.ptr(), vbuf.ptr(), N_v, H, HD);
         apply_rotary_vision(qbuf.ptr(), kbuf.ptr(), N_v, H, HD, (const float*)rope_freqs.ptr());
@@ -276,22 +276,22 @@ DeviceTensor VisionTower::forward(const float* pixel_values_host, int N_v,
         flash_attention(qbuf.ptr(), kbuf.ptr(), vbuf.ptr(), attn_out.ptr(),
                         N_v, H, HD, /*is_causal=*/false);
         // proj
-        cublas_bf16_gemm(attn_out.ptr(), false, B.proj_w, true,
-                         proj_out.ptr(), N_v, E, E);
+        tc_gemm(attn_out.ptr(), false, B.proj_w, true,
+                proj_out.ptr(), N_v, E, E, Epilog::NONE);
         // residual
         add(hidden.ptr(), proj_out.ptr(), hidden.ptr(), (size_t)N_v * E);
 
         // --- MLP sublayer ---
         rms_norm(hidden.ptr(), B.norm2_w, normed.ptr(), N_v, E, cfg.rms_norm_eps);
         // fc1 -> gate (silu applied later), fc3 -> up
-        cublas_bf16_gemm(normed.ptr(), false, B.fc1_w, true,
-                         mlp_gate.ptr(), N_v, I, E);
-        cublas_bf16_gemm(normed.ptr(), false, B.fc3_w, true,
-                         mlp_up.ptr(), N_v, I, E);
+        tc_gemm(normed.ptr(), false, B.fc1_w, true,
+                mlp_gate.ptr(), N_v, I, E, Epilog::NONE);
+        tc_gemm(normed.ptr(), false, B.fc3_w, true,
+                mlp_up.ptr(), N_v, I, E, Epilog::NONE);
         silu_inplace(mlp_gate.ptr(), (size_t)N_v * I);
         swiglu(mlp_gate.ptr(), mlp_up.ptr(), mlp_hidden.ptr(), (size_t)N_v * I);
-        cublas_bf16_gemm(mlp_hidden.ptr(), false, B.fc2_w, true,
-                         mlp_out.ptr(), N_v, E, I);
+        tc_gemm(mlp_hidden.ptr(), false, B.fc2_w, true,
+                mlp_out.ptr(), N_v, E, I, Epilog::NONE);
         add(hidden.ptr(), mlp_out.ptr(), hidden.ptr(), (size_t)N_v * E);
     }
 
@@ -310,18 +310,15 @@ DeviceTensor VisionTower::forward(const float* pixel_values_host, int N_v,
                hidden.ptr(), N_v, E, 1e-6f);
     // Reshape view: [N_v, 1536] -> [N_img, 6144] is just a reinterpretation of
     // the same memory (4 consecutive rows of 1536 concatenate to one 6144 row).
-    // We point merged at the same buffer; cuBLAS reads it as [N_img, 6144].
     Tensor merged_view(hidden.ptr(), Dtype::BF16, N_img, E * m * m);
     // mlp: Linear(6144,6144)+bias -> GELU -> Linear(6144,1536)+bias
+    // Both bias+GELU/bias fused into the tc_gemm epilogue (no extra HBM round-trip).
     DeviceTensor mh(Dtype::BF16, N_img, E * m * m);
-    cublas_bf16_gemm(merged_view.data, false, w_->merger_mlp0_w, true,
-                     mh.ptr(), N_img, E * m * m, E * m * m);
-    add_row_bias(mh.ptr(), w_->merger_mlp0_b, N_img, E * m * m);
-    gelu(mh.ptr(), (size_t)N_img * E * m * m);
+    tc_gemm(merged_view.data, false, w_->merger_mlp0_w, true,
+            mh.ptr(), N_img, E * m * m, E * m * m, Epilog::GELU, w_->merger_mlp0_b);
     DeviceTensor img(Dtype::BF16, N_img, E);
-    cublas_bf16_gemm(mh.ptr(), false, w_->merger_mlp2_w, true,
-                     img.ptr(), N_img, E, E * m * m);
-    add_row_bias(img.ptr(), w_->merger_mlp2_b, N_img, E);
+    tc_gemm(mh.ptr(), false, w_->merger_mlp2_w, true,
+            img.ptr(), N_img, E, E * m * m, Epilog::BIAS, w_->merger_mlp2_b);
 
     return img;
 }
