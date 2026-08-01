@@ -182,8 +182,10 @@ services:
     depends_on:
       vllm:
         condition: service_healthy
-      # GLM-OCR vLLM — only waited on under the `dual` profile (DEMO_DUAL=1).
-      glm_vllm:
+      # GLM-OCR demo — only waited on under the `dual` profile. dots.mocr's demo
+      # does not call into it; the dependency just orders startup so the peer
+      # link it advertises is actually up when dots.mocr's page loads.
+      demo_glm:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:${DEMO_PORT:-8601}/healthz || exit 1"]
