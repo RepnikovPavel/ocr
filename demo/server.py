@@ -119,6 +119,9 @@ def _make_worker():
         autostart=os.environ.get("DEMO_AUTOSTART", "0") == "1",
         keep_loaded=os.environ.get("DEMO_KEEP_LOADED", "0") == "1",
         idle_unload_seconds=int(os.environ.get("DEMO_IDLE_UNLOAD_S", "180")),
+        # keep_loaded is a bounded pin, not "never unload" — see
+        # DemoWorker._idle_limit; 0 restores the old infinite pin
+        keep_loaded_idle_seconds=int(os.environ.get("DEMO_KEEP_LOADED_IDLE_S", "3600")),
         # empty => DotsMOCRParser's own default (flex_attention)
         attn_implementation=os.environ.get("DEMO_ATTN_IMPLEMENTATION") or None,
         # vLLM by default: measured 1.85x faster end to end on the same card with the
@@ -518,7 +521,11 @@ def api_model_stop():
 
 @app.post("/api/model/keep_loaded")
 def api_model_keep_loaded(value: bool = Form(...)):
-    """do_not_unload_model: keep the model on the GPU between tasks."""
+    """do_not_unload_model: keep the model hot between tasks.
+
+    Bounded by DEMO_KEEP_LOADED_IDLE_S: past that much idle time the model
+    unloads anyway, so a forgotten toggle cannot pin the GPU indefinitely.
+    """
     WORKER.set_keep_loaded(value)
     return WORKER.status()
 

@@ -189,6 +189,46 @@ def test_worker_keep_loaded_prevents_idle_unload(env):
         worker.shutdown()
 
 
+def test_worker_keep_loaded_only_stretches_the_idle_window(env):
+    # a keep_loaded pin left on (and forgotten) must not hold the GPU forever:
+    # past keep_loaded_idle_seconds of no work the model unloads anyway
+    worker, _ = make_worker(env, autostart=True, idle_unload_seconds=1,
+                            keep_loaded=True, keep_loaded_idle_seconds=3)
+    try:
+        assert wait_for(lambda: worker.model_state == "loaded")
+        time.sleep(1.5)  # past the plain idle timeout, still pinned
+        assert worker.model_state == "loaded"
+        assert wait_for(lambda: worker.model_state == "stopped", timeout=5)
+        assert not worker.paused  # auto-unload keeps on-demand loading enabled
+    finally:
+        worker.shutdown()
+
+
+def test_worker_reaps_idle_vllm_container_without_a_load_cycle(env, monkeypatch):
+    # fresh deploy / host reboot: vLLM sits on VRAM with the weights resident
+    # while this worker never loaded anything — it must still be stopped once
+    # the idle clock runs out
+    calls = []
+
+    def fake_docker_api(method, path, body=None):
+        calls.append((method, path))
+        if method == "GET":
+            return 200, b'{"State": {"Running": true}}'
+        return 204, b""
+
+    monkeypatch.setattr(DemoWorker, "_VLLM_CONTAINER", "dots_vllm")
+    monkeypatch.setattr(DemoWorker, "_docker_api", staticmethod(fake_docker_api))
+    worker, _ = make_worker(env, autostart=False, idle_unload_seconds=1,
+                            engine="vllm")
+    try:
+        assert worker.model_state == "stopped"  # never loaded anything
+        assert wait_for(
+            lambda: any(m == "POST" and "/stop" in p for m, p in calls),
+            timeout=5)
+    finally:
+        worker.shutdown()
+
+
 def test_worker_new_task_resumes_paused_worker(env):
     worker, _ = make_worker(env, autostart=False)
     try:
