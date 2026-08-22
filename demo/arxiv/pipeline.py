@@ -31,6 +31,7 @@ from typing import Optional
 import requests
 
 from demo.arxiv import db, source
+from demo.arxiv import pages as pages_mod
 from demo.arxiv.db import STAGES
 from demo import storage
 
@@ -67,15 +68,17 @@ def _ocr_request(ocr_url: str, method: str, path: str, *,
 
 
 def submit_to_ocr(ocr_url: str, pdf_bytes: bytes, sha256: str,
-                  prompt_mode: str, agent: str) -> dict:
+                  prompt_mode: str, agent: str, pages: str = "all") -> dict:
     """POST the PDF to the OCR service; returns the submit response.
 
     The service dedups on (sha256, prompt_mode, pages), so a paper already
     parsed returns `status: cached` immediately — that is the cache hit that
-    makes re-runs cheap.
+    makes re-runs cheap. `pages` is the service's page-selection string
+    ("all" or a comma list like "3,7,42"); the per-page pipeline submits one
+    missing page at a time ("5").
     """
     files = {"file": (f"{sha256}.pdf", pdf_bytes, "application/pdf")}
-    data = {"prompt_mode": prompt_mode, "pages": "all", "agent": agent}
+    data = {"prompt_mode": prompt_mode, "pages": pages, "agent": agent}
     response = _ocr_request(ocr_url, "POST", "/api/v1/documents",
                             files=files, data=data, timeout=300)
     return response.json()
@@ -88,8 +91,11 @@ def ocr_status(ocr_url: str, sha256: str, prompt_mode: str) -> dict:
     return response.json()
 
 
-def ocr_bundle(ocr_url: str, sha256: str, prompt_mode: str) -> bytes:
+def ocr_bundle(ocr_url: str, sha256: str, prompt_mode: str,
+               pages: Optional[str] = None) -> bytes:
     q = {"prompt_mode": prompt_mode}
+    if pages is not None:
+        q["pages"] = pages
     response = _ocr_request(ocr_url, "GET", f"/api/v1/documents/{sha256}/bundle",
                             params=q, timeout=300)
     return response.content
@@ -279,6 +285,84 @@ def stage_local_parse(parser: str, pdf_bytes: bytes, sha256: str, arxiv_id: str,
 
 # ----------------------------------------------------------------- per-paper DAG
 
+def _dots_mocr_bundle_per_page(ocr_url: str, prompt_mode: str, agent: str,
+                               pdf_bytes: bytes, sha: str, arxiv_id: str,
+                               run_id: str, parser: str, detail) -> bytes:
+    """Parse via the OCR service with the PER-PAGE cache; returns the
+    assembled whole-document bundle.
+
+    Cache of record: one 1-page bundle per page-content hash plus a pagemap
+    manifest per document (demo/arxiv/pages.py). Only the pages missing from
+    storage go to OCR — a new arxiv version re-parses just its changed pages,
+    and a big document's failure loses at most the pages parsed in this run,
+    not the whole paper. A legacy monolithic bundle (parsed before the
+    per-page cache existed) still counts as a full hit.
+    """
+    page_shas = None
+    pagemap_blob = storage.get_pagemap(sha, parser)
+    if pagemap_blob:
+        page_shas = pages_mod.parse_pagemap(pagemap_blob)
+
+    if page_shas is None and storage.has_bundle(sha, parser):
+        # pre-pagemap parse: serve it, don't re-OCR a finished document
+        db.step_skip(run_id, arxiv_id, "pages", "legacy monolithic bundle")
+        for stage in ("submit_ocr", "wait_ocr", "fetch_bundle"):
+            db.step_skip(run_id, arxiv_id, stage, f"{parser} bundle cached")
+        return storage.get_bundle(sha, parser)
+
+    # stage "pages": content-hash every page of the source PDF
+    if page_shas is None:
+        db.step_start(run_id, arxiv_id, "pages")
+        page_shas = pages_mod.page_hashes(pdf_bytes)
+        storage.put_pagemap(sha, pages_mod.build_pagemap(page_shas), parser=parser)
+        db.step_done(run_id, arxiv_id, "pages", f"{len(page_shas)} pages hashed")
+    else:
+        db.step_skip(run_id, arxiv_id, "pages",
+                     f"pagemap cached ({len(page_shas)} pages)")
+
+    missing = [i for i, page_sha in enumerate(page_shas)
+               if not storage.has_page(page_sha, parser)]
+    if not missing:
+        for stage in ("submit_ocr", "wait_ocr", "fetch_bundle"):
+            db.step_skip(run_id, arxiv_id, stage,
+                         f"all {len(page_shas)} pages cached")
+    else:
+        db.step_start(run_id, arxiv_id, "submit_ocr")
+        waited = False
+        for done_n, page_no in enumerate(missing, 1):
+            label = f"page {page_no} ({done_n}/{len(missing)} missing)"
+            detail("submit_ocr", label)
+            submit = submit_to_ocr(ocr_url, pdf_bytes, sha, prompt_mode, agent,
+                                   pages=str(page_no))
+            if submit.get("status") == "cached":
+                detail("wait_ocr", f"page {page_no}: OCR cache hit")
+            else:
+                waited = True
+                detail("wait_ocr", f"page {page_no}: parsing")
+                wait_for_ocr(ocr_url, sha, prompt_mode,
+                             on_progress=lambda t: detail("wait_ocr", t))
+            detail("fetch_bundle", label)
+            page_bundle = ocr_bundle(ocr_url, sha, prompt_mode,
+                                     pages=str(page_no))
+            storage.put_page(page_shas[page_no], page_bundle, parser=parser)
+        db.step_done(run_id, arxiv_id, "submit_ocr",
+                     f"{len(missing)} pages submitted")
+        if waited:
+            db.step_done(run_id, arxiv_id, "wait_ocr",
+                         f"{len(missing)} pages parsed")
+        else:
+            db.step_skip(run_id, arxiv_id, "wait_ocr", "OCR cache hits")
+        db.step_done(run_id, arxiv_id, "fetch_bundle",
+                     f"{len(missing)} page bundles stored")
+
+    page_bundles = [storage.get_page(page_sha, parser) for page_sha in page_shas]
+    if any(bundle is None for bundle in page_bundles):
+        lost = [i for i, bundle in enumerate(page_bundles) if bundle is None]
+        raise PipelineError(f"page blobs missing after store: pages {lost}")
+    return pages_mod.assemble_bundle(page_bundles, sha256=sha,
+                                     prompt_mode=prompt_mode, parser=parser)
+
+
 def run_paper_dag(paper: dict, ocr_url: str, prompt_mode: str, agent: str,
                   run_id: str, parser: str = "dots_mocr",
                   download_only: bool = False) -> dict:
@@ -316,37 +400,28 @@ def run_paper_dag(paper: dict, ocr_url: str, prompt_mode: str, agent: str,
 
         # download-only runs stop here: PDF is in storage, parse skipped.
         if download_only:
-            for stage in ("submit_ocr", "wait_ocr", "fetch_bundle", "store", "index"):
+            for stage in ("pages", "submit_ocr", "wait_ocr", "fetch_bundle", "store", "index"):
                 db.step_skip(run_id, arxiv_id, stage, "download-only run")
             return {"arxiv_id": arxiv_id, "ok": True, "sha256": sha,
                     "download_only": True}
 
         # 2-4. parse — three shapes depending on parser:
-        #   - dots_mocr : submit to OCR service, wait, fetch the bundle it built
+        #   - dots_mocr : PER-PAGE cache — hash pages, OCR only the missing
+        #     ones, assemble the document bundle from 1-page bundles
         #   - local parser (classic_fitz, ...): parse in-process into a bundle
         #   - already-parsed by THIS parser: skip everything (cache hit)
-        if storage.has_bundle(sha, parser):
+        if parser == "dots_mocr":
+            bundle = _dots_mocr_bundle_per_page(
+                ocr_url, prompt_mode, agent, pdf_bytes, sha, arxiv_id, run_id,
+                parser, detail)
+        elif storage.has_bundle(sha, parser):
+            db.step_skip(run_id, arxiv_id, "pages", "monolithic parser")
             for stage in ("submit_ocr", "wait_ocr", "fetch_bundle"):
                 db.step_skip(run_id, arxiv_id, stage, f"{parser} bundle cached")
             bundle = storage.get_bundle(sha, parser)
-        elif parser == "dots_mocr":
-            db.step_start(run_id, arxiv_id, "submit_ocr")
-            submit = stage_submit_ocr(ocr_url, prompt_mode, agent, pdf_bytes, sha,
-                                      arxiv_id, on_detail=lambda t: detail("submit_ocr", t))
-            db.step_done(run_id, arxiv_id, "submit_ocr", f"status={submit.get('status')}")
-            if submit.get("status") == "cached":
-                db.step_skip(run_id, arxiv_id, "wait_ocr", "OCR cache hit")
-            else:
-                db.step_start(run_id, arxiv_id, "wait_ocr")
-                stage_wait_ocr(ocr_url, prompt_mode, sha, arxiv_id, run_id,
-                               on_detail=lambda t: detail("wait_ocr", t))
-                db.step_done(run_id, arxiv_id, "wait_ocr")
-            db.step_start(run_id, arxiv_id, "fetch_bundle")
-            bundle = stage_fetch_bundle(ocr_url, prompt_mode, sha,
-                                        on_detail=lambda t: detail("fetch_bundle", t))
-            db.step_done(run_id, arxiv_id, "fetch_bundle")
         else:
             # local parser collapses submit+wait+fetch into one in-process parse
+            db.step_skip(run_id, arxiv_id, "pages", "monolithic parser")
             db.step_start(run_id, arxiv_id, "submit_ocr")
             db.step_detail(run_id, arxiv_id, "submit_ocr", f"local {parser}")
             db.step_done(run_id, arxiv_id, "submit_ocr", f"local:{parser}")

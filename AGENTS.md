@@ -100,18 +100,24 @@ All of them bring the demo up at `http://127.0.0.1:8601`. You need a checkpoint
 at `$CKPTDIR`/`$CKPT` — get it with `scripts/download_checkpoint.sh` then
 `scripts/prepare_checkpoint.py`.
 
-## The parse cache is already built in — do NOT deploy a separate cache
+## The parse caches (two of them — know which is which)
 
-A recurring incident: a deploy agent "forgot to deploy SeaweedFS for caching
-already-parsed documents." **There is nothing to deploy.** Deduplication is
-built into the service itself (`demo/docstore.py`): every result is keyed on
-the SHA-256 of the uploaded bytes plus the prompt mode and page selection, and
-it starts automatically with the demo container — no extra service, no
-SeaweedFS, no S3. A repeat request for an already-parsed document is a SQLite
-lookup (~0.1 s, not a re-parse). See `ocrc stats` for the reuse ratio. So:
+1. **OCR service dedup** (`demo/docstore.py`, in the demo container): every
+   parse is keyed on SHA-256 of the uploaded bytes + prompt mode + page
+   selection, stored in `demo.db`. Built in, always on, nothing to deploy.
+2. **Arxiv pipeline blob cache** (PDFs, per-page parse bundles, pagemaps):
+   lives in **SeaweedFS**, which IS a separate deployable — the compose stack,
+   S3 identities and a smoke test are vendored in `docker/seaweedfs/`. Deploy
+   it together with the OCR service (`docker compose up -d` there, then
+   `bash smoke.sh`). Without it the runner falls back to a local directory
+   and `/api/v1/arxiv/stats` shows `storage_backend: local` — fine for dev,
+   wrong for the server.
 
-- **Do not add or deploy a cache component.** It already exists and is on.
-- **Do not build client-side dedup either** — just re-submit; the store catches it.
+Since 2026-08 the pipeline cache is **per page** (`demo/arxiv/pages.py`):
+page-content hash → 1-page bundle, plus a per-document pagemap. Re-runs and
+new arxiv versions only re-OCR the pages that are actually missing. Do not
+reintroduce whole-document-only caching, and do not build client-side dedup —
+re-submitting is a fast cache lookup at every layer.
 
 ## Validate without a GPU
 
@@ -132,6 +138,9 @@ waste time on a broken env.
 | `demo/db.py` | SQLite (sessions/jobs/tasks), WAL, short-lived connections |
 | `demo/agent_api.py` | `/api/v1` router for agents: `documents`, `documents/{sha}/bundle`, `queue`, `events` (SSE), `search`, `stats` |
 | `demo/docstore.py` | content-addressed store (SHA-256 + prompt mode + pages), FTS5 search |
+| `demo/arxiv/pages.py` | per-page parse cache: page hashes, pagemap, bundle assembly |
+| `demo/storage.py` | blob store: SeaweedFS (boto3) + local fallback, per-page kinds |
+| `docker/seaweedfs/` | vendored SeaweedFS single-node deploy (compose + s3.json + smoke.sh) |
 | `src/dots_mocr/cli.py` | `DotsMOCRParser`, in-process inference (HF generate) |
 | `src/dots_mocr/model/vllm_parser.py` | subclass that swaps load+generate for HTTP to a vLLM server |
 | `src/dots_mocr/utils/prompts.py` | the 7 prompt modes (layout_all/only, ocr, grounding_ocr, web_parsing, scene_spotting, general) |

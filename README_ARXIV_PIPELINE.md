@@ -14,11 +14,12 @@ semantics.
                     │  q-fin.*  OR  algo-trading       │
                     └──────────────┬───────────────────┘
                                    ▼
-   download ──▶ submit_ocr ──▶ wait_ocr ──▶ fetch_bundle ──▶ store ──▶ index
-       │             │             │              │               │
-       ▼             ▼             ▼              ▼               ▼
-   SeaweedFS     OCR service    (poll)        OCR service     SeaweedFS
-   (source PDF)  /api/v1/...                  /bundle zip     (result bundle)
+   download ──▶ pages ──▶ submit_ocr ──▶ wait_ocr ──▶ fetch_bundle ──▶ store ──▶ index
+       │          │           │              │              │             │
+       ▼          ▼           ▼              ▼              ▼             ▼
+   SeaweedFS  page cache   OCR service    (poll)       OCR service    SeaweedFS
+   (source    (per-page    /api/v1/...   per missing   /bundle zip    (result bundle
+    PDF)       hits/misses)               page only     per page       + page blobs)
 ```
 
 ## Architecture
@@ -39,23 +40,57 @@ the OCR parse itself.
 
 ## What gets cached, and where
 
+The cache is **per page**, not per document (since 2026-08: on large documents
+a per-document cache re-OCRs the whole paper when any page changes and stores
+one giant blob per version). One changed page in a new arxiv version re-parses
+only that page; pages shared across documents/versions are parsed once, ever.
+
 | artefact | location | key | lifetime |
 |----------|----------|-----|----------|
 | parsed **markdown** (text + FTS index) | OCR service's `demo.db` (existing) | `(sha256, prompt_mode, pages)` | permanent |
 | source **PDF** (binary) | SeaweedFS bucket `arxiv-papers` | `sha256` | permanent |
-| result **bundle** zip (md + images + layout) | SeaweedFS bucket `arxiv-papers` | `sha256` | permanent |
+| **page** bundle zip (1-page md + images + layout) | SeaweedFS bucket `arxiv-papers` | `sha256(rendered page)` + parser | permanent |
+| **pagemap** (JSON: ordered page hashes of a document) | SeaweedFS bucket `arxiv-papers` | `sha256(pdf)` + parser | permanent |
+| result **bundle** zip (assembled from page blobs) | SeaweedFS bucket `arxiv-papers` | `sha256` + parser | permanent (derived, regenerable) |
+
+The page hash is the SHA-256 of the page rendered to PNG at a fixed DPI
+(`demo/arxiv/pages.py`), so PDF metadata churn (v1 → v2 bumps) does not
+invalidate unchanged pages. The whole-document bundle is *assembled* from the
+1-page bundles — it is a derived serving artifact, never the cache of record.
+A legacy monolithic bundle (parsed before the per-page cache) still counts as
+a full hit and is served as-is. The classic CPU parsers (`classic_fitz`, ...)
+stay monolithic: re-running them costs seconds.
 
 A re-run that hits a paper already parsed is a cache lookup at every stage:
-the PDF comes from SeaweedFS (`download` → skipped), the OCR is already done
-(`wait_ocr` → skipped, `status: cached`), and the bundle is already stored.
+the PDF comes from SeaweedFS (`download` → skipped), every page blob is
+present (`submit_ocr`/`wait_ocr`/`fetch_bundle` → skipped), and the bundle is
+reassembled from pages without touching the OCR service.
 
 ## DAG stages
 
-`download → submit_ocr → wait_ocr → fetch_bundle → store → index`
+`download → pages → submit_ocr → wait_ocr → fetch_bundle → store → index`
 
 Each stage of each paper is one row in `pipeline_steps` (`queued` → `running`
 → `done`/`error`/`skipped`). A run's aggregate status and counters are derived
 from its steps; a failure in one paper isolates (the rest still complete).
+
+## SeaweedFS (required for the cache)
+
+The pipeline's blob cache lives in SeaweedFS. It is NOT optional in
+production — without it the store silently degrades to a local directory and
+the UI shows `storage_backend: local`. A ready single-node deployment
+(master + volume + filer + S3 gateway, plus `s3.json` identities and a
+`smoke.sh`) is vendored in [`docker/seaweedfs/`](../docker/seaweedfs/):
+
+```sh
+cd docker/seaweedfs
+docker compose up -d        # S3 on :8333, filer UI on :8888
+bash smoke.sh               # end-to-end S3 check (aws-cli + jq needed)
+```
+
+Default dev credentials (`agent_key` / `agent_secret_dev_change_me`) are in
+`docker/seaweedfs/s3.json` — change them for anything exposed beyond a
+trusted LAN. Data dir defaults to `/mnt/hdd1/seaweedfs` — pick any big disk.
 
 ## Quick start (on the server)
 
@@ -145,6 +180,7 @@ filterable parsed-papers catalogue (click a row to download its bundle).
 
 ```
 demo/storage.py                 BlobStore: SeaweedFS (boto3) + local fallback
+demo/arxiv/pages.py             per-page cache: page hashes, pagemap, bundle assembly
 demo/arxiv/db.py                papers / runs / steps tables (shared arxiv.db)
 demo/arxiv/source.py            arxiv API client + Atom feed parser
 demo/arxiv/pipeline.py          DAG executor + OCR client
@@ -152,6 +188,7 @@ demo/arxiv_api.py               /api/v1/arxiv/* router (container-side, read-onl
 demo/scripts/arxiv_pipeline.py  host-side CLI runner
 demo/static/arxiv.{html,css,js} status UI
 tests/test_storage.py           blob store contract (network-free)
+tests/test_arxiv_pages.py       per-page cache: hits, partial misses, assembly
 tests/test_arxiv_db.py          step state machine + monotonic status
 tests/test_arxiv_source.py      feed parser (network-free) + live marker
 tests/test_arxiv_pipeline.py    full DAG against a fake OCR service

@@ -30,7 +30,9 @@ _DB_PATH: Optional[str] = None
 # The DAG, in execution order. Every paper walks these stages; a run is done
 # when all its steps have a terminal status. Exposed as a constant so the API
 # and UI agree on the canonical order and names.
-STAGES = ("download", "submit_ocr", "wait_ocr", "fetch_bundle", "store", "index")
+# `pages` = split the PDF into page-content hashes and check the per-page
+# cache (dots_mocr path; monolithic parsers mark it skipped).
+STAGES = ("download", "pages", "submit_ocr", "wait_ocr", "fetch_bundle", "store", "index")
 
 # Step statuses. `running` and `queued` are live; the rest are terminal.
 STEP_QUEUED = "queued"

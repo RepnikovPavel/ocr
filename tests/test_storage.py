@@ -13,7 +13,7 @@ import pytest
 import demo.storage as storage
 from demo.storage import (
     KIND_BUNDLE, KIND_PDF, LocalBlobStore, SeaweedBlobStore, configure_store,
-    get_store, put_bundle, put_pdf, sha256_bytes, store_kind)
+    get_bundle, get_store, put_bundle, put_pdf, sha256_bytes, store_kind)
 
 
 @pytest.fixture(autouse=True)
@@ -113,8 +113,11 @@ def test_put_pdf_and_bundle_helpers(_fresh_store):
     put_pdf(sha, pdf)
     put_bundle(sha, bundle)
     assert _fresh_store.get(sha, KIND_PDF) == pdf
-    assert _fresh_store.get(sha, KIND_BUNDLE) == bundle
+    # bundles are parser-tagged (put_bundle defaults to dots_mocr), so read
+    # them through the helpers — a bare kind-only get is a different key
+    assert get_bundle(sha) == bundle
     assert storage.has_pdf(sha)
+    assert storage.has_bundle(sha)
 
 
 # ---------------------------------------------------------------- factory

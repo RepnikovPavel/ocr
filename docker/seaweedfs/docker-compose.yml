@@ -1,0 +1,105 @@
+# SeaweedFS — single-node deployment on ${SEAWEED_DIR:-/mnt/hdd1/seaweedfs}.
+#
+# Components:
+#   master    — cluster coordinator, volume-id allocator. Single instance for
+#               now; add replicas for HA when needed.
+#   volume    — stores the actual data blobs on the spinning disk. `dir` points
+#               at /mnt/hdd1 so all blobs live on the 15TB disk, not on the
+#               docker volume root filesystem.
+#   filer     — path / S3 namespace. In 4.x the default filer store is leveldb2
+#               (embedded), which is faster than Postgres on a single node and
+#               has no moving parts. Switch to Postgres via a filer.toml if
+#               you ever need a shared metadata store across filer replicas.
+#   s3        — S3-compatible gateway so agents / boto3 / aws-cli can talk to
+#               the cluster with no SeaweedFS-specific client.
+#
+# Ports exposed on the host:
+#   9333  master web UI + volume allocation API
+#   8080  volume server (blob GET/PUT)
+#   8888  filer web UI + path API
+#   8333  S3 gateway
+#
+# All persistent state lives under ${SEAWEED_DIR:-/mnt/hdd1/seaweedfs}/{master,data,filery}
+# so a container recreate / image upgrade never loses data.
+
+services:
+  master:
+    image: chrislusf/seaweedfs:4.39
+    container_name: seaweedfs_master
+    restart: unless-stopped
+    command: master -ip=master -port=9333 -mdir=/data -defaultReplication=000
+    volumes:
+      - ${SEAWEED_DIR:-/mnt/hdd1/seaweedfs}/master:/data
+    ports:
+      - "9333:9333"
+    networks:
+      - seaweedfs
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9333/cluster/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  volume:
+    image: chrislusf/seaweedfs:4.39
+    container_name: seaweedfs_volume
+    restart: unless-stopped
+    depends_on:
+      - master
+    # -dir points at the data folder on the 15TB disk; -max=0 means unlimited
+    # volumes (configurable via -volumeLimit if you want a cap).
+    command: >
+      volume -ip=volume -port=8080
+      -mserver=master:9333
+      -dir=/data
+      -max=0
+    volumes:
+      - ${SEAWEED_DIR:-/mnt/hdd1/seaweedfs}/data:/data
+    ports:
+      - "8080:8080"
+    networks:
+      - seaweedfs
+
+  filer:
+    image: chrislusf/seaweedfs:4.39
+    container_name: seaweedfs_filer
+    restart: unless-stopped
+    depends_on:
+      master:
+        condition: service_healthy
+    # leveldb2 store lives under /data/filerldb2 (default for 4.x) — persists
+    # via the ${SEAWEED_DIR:-/mnt/hdd1/seaweedfs}/filery bind mount.
+    command: >
+      filer -ip=filer -port=8888
+      -master=master:9333
+      -defaultReplicaPlacement=000
+    volumes:
+      - ${SEAWEED_DIR:-/mnt/hdd1/seaweedfs}/filery:/data
+    ports:
+      - "8888:8888"
+    networks:
+      - seaweedfs
+
+  s3:
+    image: chrislusf/seaweedfs:4.39
+    container_name: seaweedfs_s3
+    restart: unless-stopped
+    depends_on:
+      - filer
+    # 4.x removed the `-ip` flag from `weed s3` and renamed the config flag
+    # to plain `-config`. Gateway listens on all interfaces inside the net.
+    command: >
+      s3 -port=8333
+      -filer=filer:8888
+      -config=/etc/seaweedfs/s3.json
+    volumes:
+      - ./s3.json:/etc/seaweedfs/s3.json:ro
+    ports:
+      - "8333:8333"
+    networks:
+      - seaweedfs
+
+networks:
+  seaweedfs:
+    driver: bridge

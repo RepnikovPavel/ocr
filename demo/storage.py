@@ -47,7 +47,11 @@ from typing import Optional
 # both the source PDF and the parsed bundle without colliding.
 KIND_PDF = "pdf"
 KIND_BUNDLE = "bundle"
-VALID_KINDS = (KIND_PDF, KIND_BUNDLE)
+# Per-page cache (see demo/arxiv/pages.py): one 1-page bundle per page-content
+# hash, plus a pagemap manifest per document listing its page hashes in order.
+KIND_PAGE = "page"
+KIND_PAGEMAP = "pagemap"
+VALID_KINDS = (KIND_PDF, KIND_BUNDLE, KIND_PAGE, KIND_PAGEMAP)
 
 # Default parser tag for a bundle. The same PDF parsed by different algorithms
 # lives side by side: <sha>/dots_mocr.zip, <sha>/classic_fitz.zip, ... so a
@@ -111,9 +115,10 @@ class LocalBlobStore(BlobStore):
     def _path(self, sha256: str, kind: str, parser: str = "") -> Path:
         sha = sha256.lower()
         shard = sha[:2] + "/" + sha[2:4]
-        # PDFs are parser-agnostic (source bytes); bundles carry a parser tag so
-        # the same sha can hold dots_mocr.zip and classic_fitz.zip side by side.
-        stem = f"{sha}.{parser}.{kind}" if parser and kind == KIND_BUNDLE else f"{sha}.{kind}"
+        # PDFs are parser-agnostic (source bytes); parse results (bundle, page,
+        # pagemap) carry a parser tag so the same sha can hold dots_mocr and
+        # classic_fitz artifacts side by side.
+        stem = f"{sha}.{parser}.{kind}" if parser and kind != KIND_PDF else f"{sha}.{kind}"
         return self.root / shard / stem
 
     def put(self, sha256: str, kind: str, data: bytes, parser: str = "") -> str:
@@ -210,7 +215,7 @@ class SeaweedBlobStore(BlobStore):
         sha = sha256.lower()
         # same sharding as the local backend so `ls` stays manageable inside
         # the filer; the path also reads naturally in the SeaweedFS web UI.
-        stem = f"{sha}.{parser}.{kind}" if parser and kind == KIND_BUNDLE else f"{sha}.{kind}"
+        stem = f"{sha}.{parser}.{kind}" if parser and kind != KIND_PDF else f"{sha}.{kind}"
         return f"{sha[:2]}/{sha[2:4]}/{stem}"
 
     def put(self, sha256: str, kind: str, data: bytes, parser: str = "") -> str:
@@ -361,3 +366,30 @@ def get_bundle(sha256: str, parser: str = DEFAULT_PARSER) -> Optional[bytes]:
 
 def has_bundle(sha256: str, parser: str = DEFAULT_PARSER) -> bool:
     return get_store().exists(sha256, KIND_BUNDLE, parser=parser)
+
+
+def put_page(page_sha256: str, data: bytes, parser: str = DEFAULT_PARSER) -> str:
+    """Store one page's 1-page bundle zip, keyed by the page-content hash.
+
+    Pages are the cache of record for the per-page pipeline (demo/arxiv/pages.py):
+    a changed page in a new document version re-OCRs only that page, and pages
+    shared across documents/versions are parsed once, ever.
+    """
+    return get_store().put(page_sha256, KIND_PAGE, data, parser=parser)
+
+
+def get_page(page_sha256: str, parser: str = DEFAULT_PARSER) -> Optional[bytes]:
+    return get_store().get(page_sha256, KIND_PAGE, parser=parser)
+
+
+def has_page(page_sha256: str, parser: str = DEFAULT_PARSER) -> bool:
+    return get_store().exists(page_sha256, KIND_PAGE, parser=parser)
+
+
+def put_pagemap(doc_sha256: str, data: bytes, parser: str = DEFAULT_PARSER) -> str:
+    """Store a document's pagemap (JSON list of its page hashes, in order)."""
+    return get_store().put(doc_sha256, KIND_PAGEMAP, data, parser=parser)
+
+
+def get_pagemap(doc_sha256: str, parser: str = DEFAULT_PARSER) -> Optional[bytes]:
+    return get_store().get(doc_sha256, KIND_PAGEMAP, parser=parser)

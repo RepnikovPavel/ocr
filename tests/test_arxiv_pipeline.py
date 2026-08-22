@@ -28,35 +28,44 @@ def adb(tmp_path, monkeypatch):
 
 
 def _fake_pdf_bytes(arxiv_id):
-    # minimal valid PDF header so it would pass PyMuPDF if ever opened
-    return (b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n" + arxiv_id.encode())
+    """A real 3-page PDF (page text derived from the id) so the pages stage
+    can render and hash it for real."""
+    import fitz
+    doc = fitz.open()
+    for i in range(3):
+        page = doc.new_page()
+        page.insert_text((72, 72), f"{arxiv_id} page {i}")
+    data = doc.tobytes()
+    doc.close()
+    return data
 
 
 @pytest.fixture()
 def fake_ocr(monkeypatch):
     """A scripted OCR service: submit returns queued, status -> done, bundle."""
-    state = {"submitted": [], "sha_status": {}}
+    state = {"submitted": [], "pages": []}
 
     def fake_fetch_pdf(url, timeout=120.0):
         # derive an id-ish string from the url so each paper has different bytes
         return _fake_pdf_bytes(url.rsplit("/", 1)[-1])
 
-    def fake_submit(ocr_url, pdf_bytes, sha256, prompt_mode, agent):
+    def fake_submit(ocr_url, pdf_bytes, sha256, prompt_mode, agent, pages="all"):
         state["submitted"].append(sha256)
-        state["sha_status"][sha256] = "queued"
+        state["pages"].append(pages)
         return {"sha256": sha256, "status": "queued", "task_id": "task-" + sha256[:6]}
 
     def fake_status(ocr_url, sha256, prompt_mode):
         # first poll: running; second poll: done. Drives the wait loop.
         return {"sha256": sha256, "status": "done", "cached": False,
-                "progress": {"done": 3, "total": 3}}
+                "progress": {"done": 1, "total": 1}}
 
-    def fake_bundle(ocr_url, sha256, prompt_mode):
+    def fake_bundle(ocr_url, sha256, prompt_mode, pages=None):
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as zf:
-            zf.writestr("document.md", f"# parsed {sha256[:8]}\nbody")
+            label = f"page {pages}" if pages is not None else "all"
+            zf.writestr("document.md", f"# parsed {sha256[:8]} {label}\nbody")
             zf.writestr("meta.json", json.dumps(
-                {"sha256": sha256, "pages_done": 3, "generated_tokens": 100,
+                {"sha256": sha256, "pages_done": 1, "generated_tokens": 100,
                  "seconds": 5.0, "task_id": "task-x"}))
         return buf.getvalue()
 
@@ -114,11 +123,11 @@ def test_dag_skips_download_when_pdf_cached(adb, fake_ocr):
 
 
 def test_dag_ocr_cache_hit_skips_wait(adb, fake_ocr, monkeypatch):
-    """When OCR already has the parse (status=cached), wait_ocr is skipped."""
+    """When OCR already has every page (status=cached), wait_ocr is skipped."""
     paper = _paper(3)
     db.upsert_paper(paper)
     # make the fake submit return cached (the real one in fake_ocr returns queued)
-    def fake_submit(ocr_url, pdf_bytes, sha256, prompt_mode, agent):
+    def fake_submit(ocr_url, pdf_bytes, sha256, prompt_mode, agent, pages="all"):
         return {"sha256": sha256, "status": "cached", "task_id": "old-task"}
     monkeypatch.setattr(pipeline, "submit_to_ocr", fake_submit)
 
@@ -153,7 +162,7 @@ def test_dag_failure_isolates_paper(adb, fake_ocr, monkeypatch):
                  if s["arxiv_id"] == paper_bad["arxiv_id"]}
     # download errored, everything after it skipped
     assert bad_steps["download"]["status"] == "error"
-    for stage in ("submit_ocr", "wait_ocr", "fetch_bundle", "store", "index"):
+    for stage in ("pages", "submit_ocr", "wait_ocr", "fetch_bundle", "store", "index"):
         assert bad_steps[stage]["status"] == "skipped", stage
     assert db.get_paper(paper_bad["arxiv_id"])["storage_status"] == "failed"
 
