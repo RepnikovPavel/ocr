@@ -48,7 +48,8 @@ if str(ROOT) not in sys.path:
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-from demo import agent_api, db, docstore
+from demo import agent_api, arxiv_api, db, docstore
+from demo.arxiv import db as arxiv_db
 from demo.worker import PAGE_SECONDS_ESTIMATE, DemoWorker, default_temperature
 
 VARIANT = os.environ.get("DEMO_VARIANT", "mocr")
@@ -99,6 +100,15 @@ JOBS_DIR.mkdir(parents=True, exist_ok=True)
 db.init_db(STATE_DIR / "demo.db")
 # the document store shares the file: one database to deploy and back up
 docstore.init(STATE_DIR / "demo.db")
+# the arxiv pipeline tables live in their OWN file. The host-side runner (a
+# user venv with boto3) writes runs/steps/papers here; the container only
+# reads them. Keeping it separate from demo.db avoids a cross-user write
+# conflict: demo.db is owned by the container's root, the runner runs as a
+# normal user, so a shared writable file would need carefully managed perms.
+# A separate arxiv.db is created by whichever process starts first.
+ARXIV_DB_PATH = Path(os.environ.get(
+    "ARXIV_DB_PATH", str(STATE_DIR / "arxiv.db")))
+arxiv_db.init(str(ARXIV_DB_PATH))
 
 def _make_worker():
     """Construct the DemoWorker from the current environment.
@@ -141,6 +151,12 @@ app = FastAPI(title=VARIANTS[VARIANT]["title"])
 agent_api.configure(JOBS_DIR, WORKER, VARIANTS[VARIANT]["prompt_modes"],
                     VARIANTS[VARIANT]["default_mode"])
 app.include_router(agent_api.router)
+
+# Arxiv pipeline status routes (read the same demo.db the host runner writes).
+# The container never starts runs itself by default — the external runner owns
+# boto3 + the arxiv client — so ALLOW_TRIGGER is off unless the env opts in.
+arxiv_api.configure(allow_trigger=os.environ.get("ARXIV_ALLOW_TRIGGER", "0") == "1")
+app.include_router(arxiv_api.router)
 
 
 # Start the worker eagerly at import time. The FastAPI @app.on_event("startup")
@@ -564,6 +580,14 @@ def index():
     html = (Path(__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
     html = html.replace("__VARIANT__", VARIANT)
     html = html.replace("__TITLE__", VARIANTS[VARIANT]["title"])
+    return HTMLResponse(html)
+
+
+@app.get("/arxiv")
+def arxiv_ui():
+    """Arxiv pipeline progress/status panel (separate page from the OCR demo)."""
+    html = (Path(__file__).parent / "static" / "arxiv.html").read_text(encoding="utf-8")
+    html = html.replace("__TITLE__", "arxiv quant/algo-trading pipeline")
     return HTMLResponse(html)
 
 

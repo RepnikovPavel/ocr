@@ -24,4 +24,5 @@ testpaths = ["tests"]
 pythonpath = [".", "src"]
 markers = [
     "gpu: integration test that needs CUDA and a real checkpoint (DOTS_MOCR_CKPT)",
+    "live: hits a real external service (arxiv API, SeaweedFS); run with -m live on the server",
 ]
