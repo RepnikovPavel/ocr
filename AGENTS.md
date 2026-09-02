@@ -200,6 +200,11 @@ images/markdown bundles live in `$DEMO_STATE_DIR/jobs/<task_id>/`.
 9. **dots.mocr-svg is not worth touching.** See README. Use dots.mocr.
 10. **transformers 4.x does not work.** Need 5.x with bfloat16; `check_local_env.py`
     enforces it.
+11. **`status=error` is not the diagnosis.** `GET /api/v1/documents/{sha}` returns
+    the task's `error` field with the actual exception — read it before retrying
+    (`ocrc` prints it since PR #17). A page is never rejected for embedding a
+    huge figure anymore — it renders at the page matrix; regression test:
+    `tests/test_pdf_render_robustness.py` (arXiv 2407.21783/2501.12948 incident).
 
 ## Making changes
 
