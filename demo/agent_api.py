@@ -194,6 +194,10 @@ def document_status(sha256: str, prompt_mode: str = None):
         "prompt_mode": mode,
         "status": task["status"] if task else ("done" if cached else "unknown"),
         "progress": task["progress"] if task else None,
+        # The failure reason, or an agent staring at status=error has nothing
+        # to act on (the "parsing error" incident: the client showed the status
+        # word and nothing else).
+        "error": (task.get("error") if task else None),
         "cached": bool(cached),
         "generated_tokens": cached["generated_tokens"] if cached else None,
         "seconds": cached["seconds"] if cached else None,

@@ -26,48 +26,6 @@ def get_matrix(page, dpi_default=200, max_pixels=11289600):
     mat = fitz.Matrix(factor, factor)
     return mat
 
-def is_page_safe_to_render(page, max_image_pixels=30_000_000):
-    """
-    检查一个页面是否包含可能导致内存问题的超大图片。
-    
-    Args:
-        page (pymupdf.Page): 要检查的页面对象。
-        max_image_pixels (int): 单个图片允许的最大像素数 (宽*高)。
-                                默认3000万像素，约对应 5000x6000 的图片，
-                                解压后约 120MB (RGBA)，是一个比较安全的上限。
-
-    Returns:
-        bool: 如果页面安全则返回 True，否则返回 False。
-        str: 包含原因的描述信息。
-    """
-    image_list = page.get_images(full=True)
-    if not image_list:
-        return True, "页面不含图片。"
-
-    for img_index, img in enumerate(image_list):
-        xref = img[0]
-        if xref == 0:  # 内联图片，通常较小，但也可以检查
-            continue
-        
-        try:
-            # 只获取图片信息，不解压！这是关键！
-            width = img[2]  # 直接从元数据获取宽度
-            height = img[3] # 直接从元数据获取高度
-
-            if width * height > max_image_pixels:
-                reason = (
-                    f"页面包含一个超大尺寸的内嵌图片 (xref: {xref}, "
-                    f"尺寸: {width}x{height})，像素数超过阈值 {max_image_pixels}。"
-                )
-                return False, reason
-        
-        except Exception as e:
-            # 如果连获取信息都失败，也标记为不安全
-            reason = f"检查图片 xref:{xref} 的元信息时出错: {e}"
-            return False, reason
-            
-    return True, "页面所有图片尺寸都在安全范围内。"
-
 def fitz_doc_to_image(doc, target_dpi=200, origin_dpi=None) -> dict:
     """Convert fitz.Document to image, Then convert the image to numpy array.
 
@@ -85,7 +43,7 @@ def fitz_doc_to_image(doc, target_dpi=200, origin_dpi=None) -> dict:
     if pm.width == 0 or pm.height == 0:
         print(f"image is empty loading from pdf, skip")
         return None
-        
+
     if pm.width > 4500 or pm.height > 4500:
         mat = fitz.Matrix(72 / 72, 72 / 72)  # use fitz default dpi
         pm = doc.get_pixmap(matrix=mat, alpha=False)
@@ -102,9 +60,13 @@ def load_pdf_pages(pdf_file, dpi=200, page_ids=None) -> list:
             if index < 0 or index >= doc.page_count:
                 raise ValueError(f"PDF page {index + 1} is out of range 1..{doc.page_count}")
             page = doc[index]
-            is_safe, reason = is_page_safe_to_render(page)
-            if not is_safe:
-                raise ValueError(f"PDF page {index + 1} is not safe to render: {reason}")
+            # NOTE: pages are rendered as pages, never rejected for embedding
+            # high-resolution images. An earlier upstream guard refused any page
+            # whose embedded image exceeded 30 MP at native size, but get_pixmap
+            # rasterises the page at the matrix above — the embedded image's
+            # native resolution never becomes the render size. That guard made
+            # ordinary arXiv papers with high-res figures (e.g. 2407.21783,
+            # 2501.12948) unparseable, failing the whole task. Render instead.
             image = fitz_doc_to_image(page, target_dpi=dpi)
             if image is not None:
                 pages.append((index, image))
