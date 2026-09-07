@@ -20,6 +20,10 @@ def load_app(tmp_path, monkeypatch, variant="mocr", autostart="0"):
     monkeypatch.setenv("CKPTDIR", "/nonexistent")
     monkeypatch.setenv("DEMO_PEER_PORT", "8602" if variant == "mocr" else "8601")
     monkeypatch.setenv("DEMO_PEER_TITLE", "peer demo")
+    # the watchdog thread is never stopped and outlives its server instance;
+    # from a previous test it would rebuild a worker against the CURRENT
+    # global db and steal queued tasks — a cross-test flake source
+    monkeypatch.setenv("DEMO_SKIP_WATCHDOG", "1")
     sys.modules.pop("demo.server", None)
     server = importlib.import_module("demo.server")
     repo_root = pathlib.Path(__file__).resolve().parents[1]
@@ -146,6 +150,30 @@ def test_task_end_to_end_with_stub_model(mocr):
     state = client.get("/api/state").json()
     assert task_id not in [t["id"] for t in state["tasks"]]
     assert client.get(f"/api/tasks/{task_id}").json()["status"] == "done"
+
+
+def test_agent_api_surfaces_task_error(mocr):
+    """A failed parse must tell the agent WHY, not just status=error.
+
+    Regression for the 'parsing error' incident: an agent parsing arXiv PDFs
+    through ocrc watched tasks fail and the client could only print the status
+    word, because the status endpoint never returned the error text.
+    """
+    server, client, stub = mocr
+    stub.fail_on_page = 0
+    res = client.post(
+        "/api/v1/documents",
+        files={"file": ("doc.pdf", io.BytesIO(pdf_bytes(1)), "application/pdf")},
+        data={"prompt_mode": "prompt_layout_all_en"},
+    )
+    assert res.status_code == 200, res.text
+    sha256 = res.json()["sha256"]
+
+    def status():
+        return client.get(f"/api/v1/documents/{sha256}").json()
+
+    assert wait_for(lambda: status()["status"] == "error")
+    assert "boom on page 0" in status()["error"]
 
 
 def test_task_validation(mocr):

@@ -139,6 +139,9 @@ services:
       DEMO_VLLM_URL: http://127.0.0.1:${VLLM_PORT:-8000}/v1
       DEMO_VLLM_MODEL: ${VLLM_MODEL_NAME:-rednote-hilab/dots.mocr}
       DEMO_IDLE_UNLOAD_S: ${DEMO_IDLE_UNLOAD_S:-180}
+      # keep_loaded (the UI "не выгружать модель" toggle) stretches the idle
+      # window to this instead of pinning the GPU forever; 0 = never unload.
+      DEMO_KEEP_LOADED_IDLE_S: ${DEMO_KEEP_LOADED_IDLE_S:-3600}
       # Name of the vLLM container the worker stops on idle-unload to free ALL
       # VRAM (sleep-mode alone leaves ~700 MiB of CUDA context resident).
       # See demo/worker.py:_stop_vllm_container. Requires the docker.sock mount below.

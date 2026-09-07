@@ -1,0 +1,42 @@
+{
+  "identities": [
+    {
+      "name": "anonymous",
+      "actions": [
+        "Read"
+      ]
+    },
+    {
+      "name": "admin",
+      "credentials": [
+        {
+          "accessKey": "seaweedfs_admin",
+          "secretKey": "seaweedfs_admin_dev_secret_change_me"
+        }
+      ],
+      "actions": [
+        "Admin",
+        "Read",
+        "Write",
+        "List",
+        "Tagging"
+      ]
+    },
+    {
+      "name": "agent",
+      "credentials": [
+        {
+          "accessKey": "agent_key",
+          "secretKey": "agent_secret_dev_change_me"
+        }
+      ],
+      "actions": [
+        "Admin",
+        "Read",
+        "Write",
+        "List",
+        "Tagging"
+      ]
+    }
+  ]
+}

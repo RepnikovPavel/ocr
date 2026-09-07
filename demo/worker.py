@@ -2,8 +2,13 @@
 
 Model lifecycle (lazy by default):
   - the GPU stays free until a task arrives; the model loads on demand;
-  - after `idle_unload_seconds` without work the model is unloaded, unless
-    the user set keep_loaded (do_not_unload_model);
+  - after `idle_unload_seconds` without work the model is unloaded;
+    keep_loaded (do_not_unload_model) only stretches that window to
+    `keep_loaded_idle_seconds` — a forgotten toggle must not pin the GPU
+    forever;
+  - an idle vLLM container left running without any load cycle (fresh
+    deploy, host reboot with restart=unless-stopped) is stopped on the
+    same idle clock, so the service converges to zero VRAM from any state;
   - "выгрузить" pauses the worker: the model is unloaded and will not
     auto-load until "загрузить" is pressed or a new task is submitted;
   - cancelling a running task aborts generation via
@@ -97,7 +102,8 @@ class DemoWorker(threading.Thread):
     def __init__(self, ckpt, jobs_dir, device="auto", dpi=150,
                  max_pixels=2_200_000, max_completion_tokens=16384,
                  parser_factory=None, autostart=False, keep_loaded=False,
-                 idle_unload_seconds=180, attn_implementation=None,
+                 idle_unload_seconds=180, keep_loaded_idle_seconds=3600,
+                 attn_implementation=None,
                  engine="transformers", vllm_url=None, vllm_model=None,
                  model_id=None):
         super().__init__(daemon=True, name="demo-worker")
@@ -139,6 +145,12 @@ class DemoWorker(threading.Thread):
         # so an idle service costs no VRAM and a busy one is unaffected.
         self.keep_loaded = keep_loaded
         self.idle_unload_seconds = idle_unload_seconds
+        # keep_loaded is a bounded pin, not "never unload": it stretches the
+        # idle window to this many seconds. A toggle switched on once and
+        # forgotten used to pin ~12 GB of VRAM indefinitely; the window keeps
+        # the "hot between bursts of work" use case while guaranteeing the GPU
+        # is eventually handed back. 0 restores the old "never unload".
+        self.keep_loaded_idle_seconds = keep_loaded_idle_seconds
         self.current_task_id = None
         # GenerationStats of the page being decoded right now. The parser mutates
         # it in place, so /api/state reads live tokens/s straight off this object
@@ -169,6 +181,8 @@ class DemoWorker(threading.Thread):
 
     def set_keep_loaded(self, value):
         self.keep_loaded = bool(value)
+        print(f"[worker] keep_loaded={self.keep_loaded} "
+              f"(idle-unload after {self._idle_limit()}s of no work)", flush=True)
         self._wakeup.set()
 
     def set_device(self, device):
@@ -251,12 +265,26 @@ class DemoWorker(threading.Thread):
         if self.is_alive() and threading.current_thread() is not self:
             self.join(timeout=join_timeout)
 
+    def _idle_limit(self):
+        """Seconds without work after which the model is unloaded.
+
+        keep_loaded stretches the window instead of disabling the unload
+        outright (see __init__); keep_loaded_idle_seconds=0 opts back into
+        the old "never unload while pinned" behaviour.
+        """
+        if not self.keep_loaded:
+            return self.idle_unload_seconds
+        if self.keep_loaded_idle_seconds > 0:
+            return self.keep_loaded_idle_seconds
+        return float("inf")
+
     def status(self):
         idle_for = time.time() - self._last_used
         unload_in = None
-        if (self.model_state == "loaded" and not self.keep_loaded
-                and self.current_task_id is None):
-            unload_in = max(0, round(self.idle_unload_seconds - idle_for))
+        limit = self._idle_limit()
+        if (self.model_state == "loaded" and self.current_task_id is None
+                and limit != float("inf")):
+            unload_in = max(0, round(limit - idle_for))
         # The model registry (demo/models.py) drives the selector. When it is
         # active we surface the chosen id+label and the full menu so the UI can
         # render the dropdown; without it (legacy single-model deploys) these
@@ -280,6 +308,7 @@ class DemoWorker(threading.Thread):
             "paused": self.paused,
             "keep_loaded": self.keep_loaded,
             "idle_unload_seconds": self.idle_unload_seconds,
+            "keep_loaded_idle_seconds": self.keep_loaded_idle_seconds,
             "unload_in_seconds": unload_in,
             "current_task_id": self.current_task_id,
             "device": getattr(self.parser, "device", None) if self.parser else None,
@@ -448,9 +477,27 @@ class DemoWorker(threading.Thread):
             print(f"[worker] docker API {method} {path} failed: {error}", flush=True)
             return 0, None
 
+    def _vllm_container_running(self):
+        """True/False from the Docker API, None when unknown (no socket etc.)."""
+        status, body = self._docker_api(
+            "GET", f"/containers/{self._VLLM_CONTAINER}/json")
+        if status != 200:
+            return None
+        import json as _json
+        try:
+            return bool(_json.loads(body).get("State", {}).get("Running", False))
+        except Exception:  # noqa: BLE001
+            return None
+
     def _stop_vllm_container(self):
-        """Stop the vLLM Docker container to free ALL VRAM (not just weights)."""
+        """Stop the vLLM Docker container to free ALL VRAM (not just weights).
+
+        Quiet no-op when the container is already stopped — the idle reaper
+        calls this on every worker-loop pass once the idle clock has run out.
+        """
         if not self._VLLM_CONTAINER:
+            return
+        if self._vllm_container_running() is False:
             return
         status, _ = self._docker_api("POST", f"/containers/{self._VLLM_CONTAINER}/stop?t=5")
         if status in (204, 304):
@@ -466,17 +513,8 @@ class DemoWorker(threading.Thread):
         if not self._VLLM_CONTAINER:
             return
         # Check if already running
-        status, body = self._docker_api(
-            "GET", f"/containers/{self._VLLM_CONTAINER}/json")
-        if status == 200:
-            import json as _json
-            try:
-                info = _json.loads(body)
-                running = info.get("State", {}).get("Running", False)
-            except Exception:  # noqa: BLE001
-                running = False
-            if running:
-                return  # already up, nothing to do
+        if self._vllm_container_running():
+            return  # already up, nothing to do
         # Start it
         print(f"[worker] starting vLLM container '{self._VLLM_CONTAINER}'...",
               flush=True)
@@ -563,6 +601,22 @@ class DemoWorker(threading.Thread):
                 # on a persistent error (e.g. full disk).
                 time.sleep(10.0)
 
+    def _reap_idle_vllm_container(self):
+        """Stop an idle vLLM container left running outside any load cycle.
+
+        vLLM owns the GPU in a separate container with restart=unless-stopped,
+        so a fresh deploy or a host reboot starts it with the weights resident
+        even when nobody has queued work — and this worker, holding no parser
+        in the `stopped` state, would never touch it. Reaping it on the same
+        idle clock as a loaded model makes the service converge to zero VRAM
+        from any state. No-op unless the engine is vLLM and the idle clock
+        has run out; cheap otherwise (one GET over the docker socket, and
+        _stop_vllm_container stays quiet once the container is down).
+        """
+        if (self.engine == "vllm"
+                and time.time() - self._last_used > self._idle_limit()):
+            self._stop_vllm_container()
+
     def _run_loop_once(self):
         """One pass of the worker loop. See run() for the recovery wrapper."""
         if self._reload_requested:
@@ -575,6 +629,7 @@ class DemoWorker(threading.Thread):
         if self.paused:
             if self.model_state == "loaded":
                 self._unload_model()
+            self._reap_idle_vllm_container()
             self._wait()
             return
 
@@ -584,6 +639,8 @@ class DemoWorker(threading.Thread):
         self._load_now = False
 
         if self.model_state != "loaded":
+            if not demand:
+                self._reap_idle_vllm_container()
             self._wait()
             return
 
@@ -593,8 +650,7 @@ class DemoWorker(threading.Thread):
             self._last_used = time.time()
             return
 
-        if (not self.keep_loaded
-                and time.time() - self._last_used > self.idle_unload_seconds):
+        if time.time() - self._last_used > self._idle_limit():
             self._unload_model()
         self._wait()
 
@@ -700,9 +756,15 @@ class DemoWorker(threading.Thread):
             int(bbox[2] * scale_x), int(bbox[3] * scale_y),
         ]
 
-    def _input_path(self, job):
+    def _input_path(self, job, page=0):
         job_dir = self.jobs_dir / job["id"]
-        matches = list(job_dir.glob("input.*"))
+        if job["kind"] == "image":
+            # multi-image jobs store one file per page (input_000.png, ...);
+            # jobs created before that scheme have a single legacy input.png
+            indexed = sorted(job_dir.glob(f"input_{page:03d}.*"))
+            if indexed:
+                return indexed[0]
+        matches = sorted(job_dir.glob("input.*"))
         if not matches:
             raise FileNotFoundError(f"no input file for job {job['id']}")
         return matches[0]
@@ -714,7 +776,7 @@ class DemoWorker(threading.Thread):
         job = db.get_job(task["job_id"])
         if job is None:
             raise ValueError(f"job {task['job_id']} not found")
-        input_path = self._input_path(job)
+        pdf_input = self._input_path(job) if job["kind"] == "pdf" else None
         out_dir = self.jobs_dir / job["id"] / "out"
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -756,7 +818,7 @@ class DemoWorker(threading.Thread):
             started = time.time()
             self.live_page = page_no
             if job["kind"] == "pdf":
-                rendered = load_pdf_pages(str(input_path), dpi=dpi, page_ids=[page_no])
+                rendered = load_pdf_pages(str(pdf_input), dpi=dpi, page_ids=[page_no])
                 if not rendered:
                     raise ValueError(f"page {page_no} did not render")
                 origin_image = rendered[0][1]
@@ -767,7 +829,7 @@ class DemoWorker(threading.Thread):
                     custom_prompt=custom_prompt, temperature=temperature,
                 )
             else:
-                origin_image = fetch_image(str(input_path))
+                origin_image = fetch_image(str(self._input_path(job, page_no)))
                 fitz_preprocess = PROMPT_TO_FITZ_PREPROCESS.get(prompt_mode, False)
                 page_bbox = self._scale_bbox(bbox, params.get("bbox_view_size"), origin_image)
                 page_result = self.parser._parse_single_image(
