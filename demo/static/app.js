@@ -159,7 +159,8 @@ const HELP = {
       <li>Выберите режим (скилл модели) и нажмите «Запустить».</li>
     </ol>
     <p>Результат можно выгрузить кнопками <b>⬇ zip</b> (markdown + картинки + layout JSON)
-    и <b>⬇ pdf</b> (PDF, отрендеренный из markdown) в секции «Результаты».</p>
+    и <b>⬇ pdf</b> (печатная версия с отрендеренными формулами — в диалоге печати выберите
+    «Сохранить как PDF») в секции «Результаты».</p>
     <p>Скиллы:</p>
     <ul>
       <li><b>layout_all</b> — блоки страницы: bbox + категория + текст → Markdown (основной режим);</li>
@@ -535,7 +536,79 @@ function exportTask(fmt) {
   window.open(`/api/tasks/${state.resultTaskId}/export.${fmt}`, "_blank");
 }
 $("export-zip").onclick = () => exportTask("zip");
-$("export-pdf").onclick = () => exportTask("pdf");
+$("export-pdf").onclick = () => exportPdfPrint();
+
+/* Server-side PDF (fitz Story) cannot typeset TeX — formulas came out as
+   monospace source. The print view instead re-renders the markdown with the
+   SAME MathJax pipeline as the on-screen preview in a dedicated window and
+   opens the browser print dialog ("Save as PDF"): the formulas in the file
+   are the ones the user saw, with zero new server dependencies. */
+const EXPORT_CSS = `
+  body { font-family: Georgia, 'Times New Roman', serif; font-size: 11pt; line-height: 1.45;
+         max-width: 720px; margin: 0 auto; padding: 16px; color: #111; }
+  img { max-width: 100%; }
+  pre { background: #f4f4f4; padding: 8px; white-space: pre-wrap; word-break: break-word; }
+  code { background: #f4f4f4; padding: 1px 3px; }
+  table { border-collapse: collapse; } td, th { border: 1px solid #999; padding: 3px 8px; }
+  section.page { page-break-after: always; } section.page:last-child { page-break-after: auto; }
+  .page-tag { color: #888; font-size: 9pt; font-family: sans-serif; }
+  @page { margin: 18mm; }
+`;
+
+async function exportPdfPrint() {
+  if (!state.resultTaskId) return;
+  $("run-error").textContent = "";
+  const task = await (await fetch(`/api/tasks/${state.resultTaskId}`)).json();
+  const sections = [];
+  for (const page of (task.result || [])) {
+    const urls = page.urls || {};
+    if (!urls.md_content) continue;
+    const md = (await (await fetch(`/api/raw?path=${encodeURIComponent(urls.md_content)}`)).json()).content;
+    const div = document.createElement("div");
+    div.innerHTML = renderMarkdownWithMath(md);
+    rewriteRelativeImages(div, urls.md_content.replace(/[^/]*$/, ""));
+    div.querySelectorAll("img").forEach((img) => img.setAttribute("loading", "eager"));
+    sections.push(`<section class="page"><div class="page-tag">стр. ${page.page_no + 1}</div>${div.innerHTML}</section>`);
+  }
+  if (!sections.length) { $("run-error").textContent = "нет markdown для экспорта"; return; }
+  const w = window.open("", "_blank");
+  if (!w) { $("run-error").textContent = "браузер заблокировал всплывающее окно"; return; }
+  w.document.write(`<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<title>export — ${task.prompt_mode}</title>
+<style>${EXPORT_CSS}</style>
+<script>
+  window.MathJax = {
+    tex: { inlineMath: [['\\\\(', '\\\\)']], displayMath: [['\\\\[', '\\\\]']] },
+    svg: { fontCache: 'local' },
+    options: { enableMenu: false, skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'] },
+    startup: { typeset: false },
+  };
+<\/script>
+<script src="/static/tex-svg.js"><\/script>
+</head><body>${sections.join("")}
+<script>
+window.addEventListener("load", async () => {
+  try {
+    await MathJax.startup.promise;
+    await MathJax.typesetPromise();
+    // MathJax \\href can emit clickable links from untrusted TeX — strip them
+    document.querySelectorAll("a").forEach((a) => {
+      for (const name of ["href", "xlink:href"]) {
+        const v = a.getAttribute(name);
+        if (v && /^(javascript|vbscript|data):/i.test(v.replace(/[\\u0000-\\u0020]/g, "").toLowerCase())) {
+          a.removeAttribute(name);
+        }
+      }
+    });
+    await Promise.all([...document.images].map((img) =>
+      img.complete ? Promise.resolve() : img.decode().catch(() => {})));
+  } catch (err) { console.warn(err); }
+  window.print();
+});
+<\/script>
+</body></html>`);
+  w.document.close();
+}
 
 /* ------------------------------------------------ results */
 
