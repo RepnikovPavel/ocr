@@ -40,7 +40,7 @@ import zipfile
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
@@ -725,10 +725,9 @@ def api_task_export_zip(task_id: str):
 def api_task_export_pdf(task_id: str):
     """The task's markdown rendered to a PDF (fitz Story; no extra deps).
 
-    NOTE: Story cannot typeset TeX — formulas come out verbatim in monospace.
-    The UI's "⬇ pdf" button therefore opens a MathJax print view instead
-    (app.js exportPdfPrint); this endpoint remains for API consumers who want
-    a one-call file and can live without typeset math.
+    NOTE: this one-call GET variant cannot typeset TeX — formulas come out
+    verbatim in monospace. The UI's "⬇ pdf" button uses the POST variant
+    below, which receives MathJax-typeset formulas from the browser.
     """
     task = _task_for_export(task_id)
     md = _task_markdown(task)
@@ -737,7 +736,42 @@ def api_task_export_pdf(task_id: str):
     from demo import mdexport
 
     out_dir = JOBS_DIR / task["job_id"] / "out"
-    pdf = mdexport.markdown_to_pdf(md, assets_dir=out_dir, title=f"task {task_id}")
+    pdf = mdexport.markdown_to_pdf(md, assets_dir=out_dir, title=_export_title(task))
+    filename = f"{task_id}-{task['prompt_mode']}.pdf"
+    return Response(
+        content=pdf, media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+def _export_title(task):
+    job = db.get_job(task["job_id"])
+    name = (job or {}).get("filename") or "document"
+    return f"{name} — {task['prompt_mode']}"
+
+
+@app.post("/api/tasks/{task_id}/export.pdf")
+def api_task_export_pdf_typed(task_id: str, payload: dict = Body(...)):
+    """PDF with typeset formulas, driven by the browser.
+
+    The client renders the task's markdown exactly like the on-screen preview
+    (marked + MathJax in a hidden iframe), extracts one self-contained SVG per
+    formula, and POSTs the preview HTML + the SVGs here. The response is a
+    file download — no print dialog, no browser chrome in the output.
+    """
+    task = _task_for_export(task_id)
+    html_body = payload.get("html") or ""
+    math_svgs = payload.get("math") or []
+    if not html_body.strip():
+        raise HTTPException(400, "empty html")
+    if len(html_body) > 20 * 1024 * 1024:
+        raise HTTPException(413, "html too large")
+    if len(math_svgs) > 1000:
+        raise HTTPException(400, "too many formulas")
+    from demo import mdexport
+
+    out_dir = JOBS_DIR / task["job_id"] / "out"
+    pdf = mdexport.html_to_pdf(html_body, assets_dir=out_dir, math_svgs=math_svgs,
+                               title=_export_title(task))
     filename = f"{task_id}-{task['prompt_mode']}.pdf"
     return Response(
         content=pdf, media_type="application/pdf",

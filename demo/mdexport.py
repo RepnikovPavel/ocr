@@ -17,6 +17,7 @@ from __future__ import annotations
 import html
 import io
 import re
+from pathlib import Path
 
 import fitz
 
@@ -181,3 +182,93 @@ def markdown_to_pdf(md_text, assets_dir=None, title="document"):
                  + html.escape(md_text).replace("\n", "<br/>")
                  + "</p></body></html>")
         return _render_pdf(plain, None)
+
+
+# ---------------------------------------------------------------- UI export
+
+# The browser export path: the client typesets formulas with the SAME MathJax
+# pipeline as the on-screen preview (in a hidden iframe with fontCache=none so
+# every SVG is self-contained paths) and POSTs the preview HTML plus one SVG
+# per formula. Here the SVGs become PNGs (cairosvg is already a dependency,
+# and pure-path SVGs need no fonts), the <img data-math="K"> placeholders get
+# real sources, and fitz Story lays out the final document. The user gets a
+# PDF FILE download — no print dialog, no browser chrome (URL/date/page
+# numbers), no markup that was not in the document.
+
+MATH_DIR_MOUNT = "__math"
+_MATH_IMG_RE = re.compile(r'<img\b[^>]*\bdata-math="(\d+)"[^>]*?/?>')
+
+
+def _svg_to_png(svg_text, scale=4):
+    """MathJax SVG (fontCache=none: pure paths) -> PNG bytes, None on failure."""
+    try:
+        import cairosvg
+
+        return cairosvg.svg2png(bytestring=svg_text.encode("utf-8"), scale=scale)
+    except Exception:
+        return None
+
+
+def _sanitize_export_html(doc_html):
+    """The HTML comes from the client (already sanitized there); re-check."""
+    doc_html = re.sub(r"<(script|iframe|object|embed|form)\b[^>]*>.*?</\1>",
+                      "", doc_html, flags=re.S | re.I)
+    doc_html = re.sub(r"</?(script|iframe|object|embed|form)\b[^>]*/?>", "",
+                      doc_html, flags=re.I)
+    doc_html = re.sub(r"""\son\w+\s*=\s*"[^"]*\"""", "", doc_html, flags=re.I)
+    doc_html = re.sub(r"\son\w+\s*=\s*'[^']*'", "", doc_html, flags=re.I)
+    doc_html = re.sub(r"(href|src)\s*=\s*([\"'])\s*(javascript|vbscript|data)[^\"']*\2",
+                      r"\1=\2#\2", doc_html, flags=re.I)
+    # preview-image links may carry a leading ./ — the archive wants them relative
+    doc_html = doc_html.replace('src="./', 'src="')
+    return doc_html
+
+
+def html_to_pdf(html_body, assets_dir=None, math_svgs=(), title="document"):
+    """Preview HTML + MathJax SVGs -> PDF bytes (see module note above).
+
+    `math_svgs[k]` is the SVG for every <img data-math="k"> placeholder in
+    `html_body`. Formulas whose SVG fails to convert degrade to a text marker
+    rather than failing the whole export.
+    """
+    import tempfile
+
+    math_dir = Path(tempfile.mkdtemp(prefix="mdexport-math-"))
+    for index, svg in enumerate(math_svgs):
+        png = _svg_to_png(svg)
+        if png is not None:
+            (math_dir / f"{index}.png").write_bytes(png)
+
+    body = _sanitize_export_html(html_body)
+
+    def substitute(match):
+        index = int(match.group(1))
+        if not (math_dir / f"{index}.png").exists():
+            return "(формула)"
+        style = re.search(r'style="([^"]*)"', match.group(0))
+        style = f' style="{style.group(1)}"' if style else ""
+        return f'<img src="{MATH_DIR_MOUNT}/{index}.png"{style}>'
+
+    body = _MATH_IMG_RE.sub(substitute, body)
+    html_doc = (f"<html><head><title>{html.escape(title)}</title></head>"
+                f"<body>{body}</body></html>")
+
+    archive = fitz.Archive()
+    if assets_dir:
+        archive.add(str(assets_dir))
+    archive.add(str(math_dir), path=MATH_DIR_MOUNT)
+    try:
+        pdf = _render_pdf(html_doc, archive)
+    except Exception:
+        plain = ("<html><body><p>"
+                 + html.escape(re.sub(r"<[^>]+>", " ", html_body)).replace("\n", "<br/>")
+                 + "</p></body></html>")
+        pdf = _render_pdf(plain, None)
+    # a proper document title, not the viewer's default (URL / "untitled")
+    doc = fitz.open("pdf", pdf)
+    doc.set_metadata({**(doc.metadata or {}), "title": title,
+                      "creator": "dots.mocr demo", "producer": "dots.mocr demo"})
+    out = io.BytesIO()
+    doc.save(out, garbage=3, deflate=True)
+    doc.close()
+    return out.getvalue()
