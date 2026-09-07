@@ -119,8 +119,8 @@ const HELP = {
       <li>Выберите режим (скилл модели) и нажмите «Запустить».</li>
     </ol>
     <p>Результат можно выгрузить кнопками <b>⬇ zip</b> (markdown + картинки + layout JSON)
-    и <b>⬇ pdf</b> (печатная версия с отрендеренными формулами — в диалоге печати выберите
-    «Сохранить как PDF») в секции «Результаты».</p>
+    и <b>⬇ pdf</b> (готовый PDF-файл с отрендеренными формулами — скачивается сразу,
+    без диалога печати) в секции «Результаты».</p>
     <p>Скиллы:</p>
     <ul>
       <li><b>layout_all</b> — блоки страницы: bbox + категория + текст → Markdown (основной режим);</li>
@@ -486,78 +486,127 @@ function exportTask(fmt) {
   window.open(`/api/tasks/${state.resultTaskId}/export.${fmt}`, "_blank");
 }
 $("export-zip").onclick = () => exportTask("zip");
-$("export-pdf").onclick = () => exportPdfPrint();
+$("export-pdf").onclick = () => exportPdf();
 
-/* Server-side PDF (fitz Story) cannot typeset TeX — formulas came out as
-   monospace source. The print view instead re-renders the markdown with the
-   SAME MathJax pipeline as the on-screen preview in a dedicated window and
-   opens the browser print dialog ("Save as PDF"): the formulas in the file
-   are the ones the user saw, with zero new server dependencies. */
-const EXPORT_CSS = `
-  body { font-family: Georgia, 'Times New Roman', serif; font-size: 11pt; line-height: 1.45;
-         max-width: 720px; margin: 0 auto; padding: 16px; color: #111; }
-  img { max-width: 100%; }
-  pre { background: #f4f4f4; padding: 8px; white-space: pre-wrap; word-break: break-word; }
-  code { background: #f4f4f4; padding: 1px 3px; }
-  table { border-collapse: collapse; } td, th { border: 1px solid #999; padding: 3px 8px; }
-  section.page { page-break-after: always; } section.page:last-child { page-break-after: auto; }
-  .page-tag { color: #888; font-size: 9pt; font-family: sans-serif; }
-  @page { margin: 18mm; }
-`;
-
-async function exportPdfPrint() {
-  if (!state.resultTaskId) return;
+/* PDF export with typeset formulas and NO browser chrome. The markdown is
+   rendered by the same marked+MathJax pipeline as the preview, but MathJax
+   runs in a hidden iframe with fontCache "none" so every formula SVG is
+   self-contained paths; the preview HTML plus those SVGs go to the server,
+   which embeds them into a fitz-built PDF that simply downloads as a file.
+   No new window and no print dialog — hence no URL/date/page-number header
+   lines either. */
+async function exportPdf() {
+  const taskId = state.resultTaskId;
+  if (!taskId) return;
   $("run-error").textContent = "";
-  const task = await (await fetch(`/api/tasks/${state.resultTaskId}`)).json();
-  const sections = [];
-  for (const page of (task.result || [])) {
-    const urls = page.urls || {};
-    if (!urls.md_content) continue;
-    const md = (await (await fetch(`/api/raw?path=${encodeURIComponent(urls.md_content)}`)).json()).content;
-    const div = document.createElement("div");
-    div.innerHTML = renderMarkdownWithMath(md);
-    rewriteRelativeImages(div, urls.md_content.replace(/[^/]*$/, ""));
-    div.querySelectorAll("img").forEach((img) => img.setAttribute("loading", "eager"));
-    sections.push(`<section class="page"><div class="page-tag">стр. ${page.page_no + 1}</div>${div.innerHTML}</section>`);
+  try {
+    const task = await (await fetch(`/api/tasks/${taskId}`)).json();
+    const pages = [];
+    for (const page of (task.result || [])) {
+      const urls = page.urls || {};
+      if (!urls.md_content) continue;
+      const md = (await (await fetch(`/api/raw?path=${encodeURIComponent(urls.md_content)}`)).json()).content;
+      // keep image links RELATIVE (images/foo.png) — the server resolves them
+      // against the task's out dir inside the PDF archive
+      pages.push(renderMarkdownWithMath(md));
+    }
+    if (!pages.length) { $("run-error").textContent = "нет markdown для экспорта"; return; }
+    const html = pages.map((h, i) =>
+      `<div${i < pages.length - 1 ? ' style="page-break-after: always"' : ""}>${h}</div>`).join("");
+
+    const iframe = await typesetInHiddenFrame(html);
+    const svgs = extractMathSvgs(iframe);
+    const body = iframe.contentDocument.body.innerHTML;
+    iframe.remove();
+
+    const res = await fetch(`/api/tasks/${taskId}/export.pdf`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({html: body, math: svgs}),
+    });
+    if (!res.ok) { $("run-error").textContent = await res.text(); return; }
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${taskId}-${task.prompt_mode}.pdf`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch (err) {
+    $("run-error").textContent = "экспорт pdf: " + err;
   }
-  if (!sections.length) { $("run-error").textContent = "нет markdown для экспорта"; return; }
-  const w = window.open("", "_blank");
-  if (!w) { $("run-error").textContent = "браузер заблокировал всплывающее окно"; return; }
-  w.document.write(`<!doctype html><html lang="ru"><head><meta charset="utf-8">
-<title>export — ${task.prompt_mode}</title>
-<style>${EXPORT_CSS}</style>
+}
+
+/* Hidden iframe running its own MathJax instance. visibility:hidden (not
+   display:none) so layout still happens and formula sizes are measurable. */
+function typesetInHiddenFrame(html) {
+  return new Promise((resolve, reject) => {
+    const iframe = document.createElement("iframe");
+    iframe.setAttribute("style",
+      "position:absolute; left:-10000px; top:0; width:800px; height:600px; visibility:hidden;");
+    iframe.setAttribute("aria-hidden", "true");
+    document.body.appendChild(iframe);
+    const doc = iframe.contentDocument;
+    doc.open();
+    doc.write(`<!doctype html><html><head><meta charset="utf-8">
 <script>
   window.MathJax = {
     tex: { inlineMath: [['\\\\(', '\\\\)']], displayMath: [['\\\\[', '\\\\]']] },
-    svg: { fontCache: 'local' },
+    svg: { fontCache: 'none' },
     options: { enableMenu: false, skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'] },
     startup: { typeset: false },
   };
 <\/script>
 <script src="/static/tex-svg.js"><\/script>
-</head><body>${sections.join("")}
-<script>
-window.addEventListener("load", async () => {
-  try {
-    await MathJax.startup.promise;
-    await MathJax.typesetPromise();
-    // MathJax \\href can emit clickable links from untrusted TeX — strip them
-    document.querySelectorAll("a").forEach((a) => {
-      for (const name of ["href", "xlink:href"]) {
-        const v = a.getAttribute(name);
-        if (v && /^(javascript|vbscript|data):/i.test(v.replace(/[\\u0000-\\u0020]/g, "").toLowerCase())) {
-          a.removeAttribute(name);
-        }
+</head><body>${html}</body></html>`);
+    doc.close();
+    const deadline = Date.now() + 30000;
+    const poll = () => {
+      const w = iframe.contentWindow;
+      if (w && w.MathJax && w.MathJax.startup) {
+        w.MathJax.startup.promise
+          .then(() => w.MathJax.typesetPromise())
+          .then(() => resolve(iframe), reject);
+      } else if (Date.now() > deadline) {
+        iframe.remove();
+        reject(new Error("MathJax не загрузился (30s)"));
+      } else {
+        setTimeout(poll, 100);
       }
-    });
-    await Promise.all([...document.images].map((img) =>
-      img.complete ? Promise.resolve() : img.decode().catch(() => {})));
-  } catch (err) { console.warn(err); }
-  window.print();
-});
-<\/script>
-</body></html>`);
-  w.document.close();
+    };
+    poll();
+  });
+}
+
+/* Replace every typeset mjx-container with an <img data-math="K"> placeholder
+   carrying the measured size; return the SVGs in placeholder order. */
+function extractMathSvgs(iframe) {
+  const doc = iframe.contentDocument;
+  const svgs = [];
+  doc.querySelectorAll("mjx-container").forEach((container) => {
+    const svg = container.querySelector("svg");
+    if (!svg) { container.remove(); return; }
+    const rect = container.getBoundingClientRect();
+    const display = container.hasAttribute("display");
+    const heightMatch = /([\d.]+)ex/.exec(svg.getAttribute("height") || "");
+    const pxPerEx = (heightMatch && rect.height) ? rect.height / parseFloat(heightMatch[1]) : 8;
+    const heightPt = (rect.height * 0.75).toFixed(1);
+    const valignMatch = /vertical-align:\s*([-\d.]+)ex/.exec(svg.getAttribute("style") || "");
+    const valignPt = valignMatch ? (parseFloat(valignMatch[1]) * pxPerEx * 0.75).toFixed(1) : "0";
+    svgs.push(svg.outerHTML);
+    const img = doc.createElement("img");
+    img.setAttribute("data-math", String(svgs.length - 1));
+    img.setAttribute("style", `height:${heightPt}pt; vertical-align:${valignPt}pt;`);
+    img.setAttribute("alt", "(формула)");
+    if (display) {
+      const wrap = doc.createElement("div");
+      wrap.setAttribute("style", "text-align:center; margin:6pt 0;");
+      container.replaceWith(wrap);
+      wrap.appendChild(img);
+    } else {
+      container.replaceWith(img);
+    }
+  });
+  return svgs;
 }
 
 /* ------------------------------------------------ results */

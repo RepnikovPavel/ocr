@@ -328,17 +328,74 @@ def test_dropzone_click_focuses_and_never_opens_the_picker():
     assert 'document.addEventListener("paste"' in app_js
 
 
-def test_pdf_export_uses_mathjax_print_view():
-    """Regression (2026-09-07): the server-side fitz Story PDF cannot typeset
-    TeX, so formulas exported as monospace source. The UI export must open the
-    MathJax print view (same renderer as the preview) instead."""
+def test_pdf_export_uses_iframe_mathjax_and_post():
+    """Regression (2026-09-07, twice): (a) the fitz Story GET export cannot
+    typeset TeX — formulas exported as monospace source; (b) the browser
+    print-window workaround added chrome garbage (URL, date, page numbers,
+    title) and opened a new tab. The final design: a hidden iframe typesets
+    with MathJax fontCache=none, the preview HTML + formula SVGs are POSTed,
+    and a ready PDF file downloads — no new window, no print dialog."""
     from pathlib import Path
 
     static = Path(__file__).resolve().parents[1] / "demo" / "static"
     app_js = (static / "app.js").read_text(encoding="utf-8")
     index = (static / "index.html").read_text(encoding="utf-8")
     assert 'id="export-pdf"' in index
-    assert '$("export-pdf").onclick = () => exportPdfPrint()' in app_js
-    assert "/static/tex-svg.js" in app_js      # MathJax inside the print window
-    assert "MathJax.typesetPromise" in app_js  # typeset before printing
-    assert "window.print()" in app_js
+    assert '$("export-pdf").onclick = () => exportPdf()' in app_js
+    # hidden iframe MathJax, self-contained SVGs (no font dependency)
+    assert "fontCache: 'none'" in app_js
+    assert 'method: "POST"' in app_js and "export.pdf" in app_js
+    assert "URL.createObjectURL" in app_js  # direct file download
+    # neither of the rejected approaches may come back
+    export_section = app_js.split("/* ------------------------------------------------ export */")[1]
+    assert "window.print()" not in export_section
+    assert 'window.open("", "_blank")' not in export_section
+
+
+def test_export_pdf_post_embeds_typeset_formula(mocr):
+    """The browser-driven export: preview HTML + MathJax SVG -> PDF file."""
+    _, client, _ = mocr
+    task_id = _run_stub_task(client)
+    svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="10ex" height="2.5ex" '
+           'viewBox="0 -1000 500 1200"><g transform="scale(1,-1)">'
+           '<path d="M10 0 L100 800 L200 0 Z" fill="black"/></g></svg>')
+    html = ('<h1>Страница</h1><p>до <img data-math="0" '
+            'style="height:14pt; vertical-align:-3pt;"> после</p>')
+    res = client.post(f"/api/tasks/{task_id}/export.pdf",
+                      json={"html": html, "math": [svg]})
+    assert res.status_code == 200, res.text
+    assert res.content.startswith(b"%PDF")
+    assert "attachment" in res.headers["content-disposition"]
+    import fitz
+    doc = fitz.open("pdf", res.content)
+    assert doc.page_count >= 1
+    assert "до" in doc[0].get_text() and "после" in doc[0].get_text()
+    assert len(doc[0].get_images()) == 1  # the formula image is embedded
+    assert "layout_all" in doc.metadata["title"]  # no "about:blank"-style junk
+    doc.close()
+
+
+def test_export_pdf_post_validation(mocr):
+    _, client, _ = mocr
+    task_id = _run_stub_task(client)
+    assert client.post(f"/api/tasks/{task_id}/export.pdf",
+                       json={"html": "  ", "math": []}).status_code == 400
+    assert client.post("/api/tasks/missing/export.pdf",
+                       json={"html": "<p>x</p>", "math": []}).status_code == 404
+    too_many = client.post(f"/api/tasks/{task_id}/export.pdf",
+                           json={"html": "<p>x</p>", "math": ["<svg/>"] * 1001})
+    assert too_many.status_code == 400
+
+
+def test_html_to_pdf_sanitizes_and_degrades(tmp_path):
+    from demo import mdexport
+
+    # script/handlers are stripped; a broken svg becomes a text marker
+    pdf = mdexport.html_to_pdf(
+        '<p>ok</p><script>alert(1)</script><p onclick="x()">t</p>'
+        '<img data-math="0" style="height:10pt">',
+        assets_dir=tmp_path, math_svgs=["<not-svg"], title="t")
+    assert pdf.startswith(b"%PDF")
+    import fitz
+    text = fitz.open("pdf", pdf)[0].get_text()
+    assert "ok" in text and "alert" not in text and "формула" in text
