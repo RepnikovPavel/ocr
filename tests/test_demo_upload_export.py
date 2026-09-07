@@ -399,3 +399,26 @@ def test_html_to_pdf_sanitizes_and_degrades(tmp_path):
     import fitz
     text = fitz.open("pdf", pdf)[0].get_text()
     assert "ok" in text and "alert" not in text and "формула" in text
+
+
+def test_iframe_font_sizes_match_pdf_css():
+    """Regression (2026-09-07): MathJax scales formulas to the surrounding
+    font; the hidden typeset iframe ran at the browser default 16px while the
+    PDF body is 10pt, so exported formulas came out ~1.6x too large. The two
+    stylesheets must carry identical font sizes."""
+    import re
+    from pathlib import Path
+
+    from demo import mdexport
+
+    app_js = (Path(__file__).resolve().parents[1]
+              / "demo" / "static" / "app.js").read_text(encoding="utf-8")
+    iframe_css = re.search(r"<style>([\s\S]*?)</style>", app_js).group(1)
+    pdf_css = mdexport._CSS
+    for selector in ("body", "h1", "h2", "h3", "code"):
+        for css in (iframe_css, pdf_css):
+            assert re.search(rf"{selector}[ ,{{][^}}]*?font-size: ([\d.]+)pt", css), \
+                f"{selector} font-size missing"
+        sizes = [re.search(rf"{selector}[ ,{{][^}}]*?font-size: ([\d.]+)pt", css).group(1)
+                 for css in (iframe_css, pdf_css)]
+        assert sizes[0] == sizes[1], f"{selector}: iframe {sizes[0]}pt != pdf {sizes[1]}pt"
