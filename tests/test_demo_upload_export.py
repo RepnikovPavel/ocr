@@ -301,3 +301,28 @@ def test_mdexport_pdf_never_raises_on_garbage(tmp_path):
     weird = "| broken\n\x00\x01 weird <tag attr='x'> $unclosed\n" * 50
     pdf = mdexport.markdown_to_pdf(weird, assets_dir=tmp_path)
     assert pdf.startswith(b"%PDF")
+
+
+# ---------------------------------------------------------- upload UX (static)
+
+def test_dropzone_click_focuses_and_never_opens_the_picker():
+    """Regression (2026-09-07): a stale cached app.js kept the OLD handler
+    where any click on the dropzone opened the file dialog, so the new
+    click-to-focus-for-paste flow never worked. Pin both sides: the click
+    handler must not touch the file input, and index.html must version-pin
+    app.js so browsers cannot serve a stale copy."""
+    import re
+    from pathlib import Path
+
+    static = Path(__file__).resolve().parents[1] / "demo" / "static"
+    app_js = (static / "app.js").read_text(encoding="utf-8")
+    index = (static / "index.html").read_text(encoding="utf-8")
+    assert "/static/app.js?v=" in index
+    handler = re.search(r"dropzone\.onclick\s*=\s*([^;]+);", app_js)
+    assert handler and "file-input" not in handler.group(1)
+    # the picker is opened only by the attach button
+    attach = [ln for ln in app_js.splitlines() if '$("attach-btn").onclick' in ln]
+    assert attach and 'file-input' in attach[0] and '.click()' in attach[0]
+    # paste is handled at document level: a non-editable div does not get
+    # paste events in every browser
+    assert 'document.addEventListener("paste"' in app_js
