@@ -202,12 +202,23 @@ MATH_DIR_MOUNT = "__math"
 _MATH_IMG_RE = re.compile(r'<img\b[^>]*\bdata-math="(\d+)"[^>]*?/?>')
 
 
-def _svg_to_png(svg_text, scale=4):
-    """MathJax SVG (fontCache=none: pure paths) -> PNG bytes, None on failure."""
+def _svg_to_png(svg_text, width_px=None, height_px=None, scale=3):
+    """MathJax SVG (fontCache=none: pure paths) -> PNG bytes, None on failure.
+
+    Display equations come as width="100%" svgs with no intrinsic size;
+    cairosvg cannot rasterize those without an explicit viewport, so the
+    client sends the measured pixel size and we rasterize exactly into it.
+    """
     try:
         import cairosvg
 
-        return cairosvg.svg2png(bytestring=svg_text.encode("utf-8"), scale=scale)
+        kwargs = {}
+        if width_px and height_px:
+            kwargs = {"output_width": max(1, round(width_px * scale)),
+                      "output_height": max(1, round(height_px * scale))}
+        else:
+            kwargs = {"scale": scale}
+        return cairosvg.svg2png(bytestring=svg_text.encode("utf-8"), **kwargs)
     except Exception:
         return None
 
@@ -227,18 +238,43 @@ def _sanitize_export_html(doc_html):
     return doc_html
 
 
+def _math_item_to_png(item):
+    """One math payload item -> PNG bytes.
+
+    Preferred: the browser-rasterized PNG (data URL) — only a real browser
+    engine lays out MathJax display equations (width="100%", nested <svg>,
+    no viewBox). Fallback: server-side cairosvg on the raw SVG, using the
+    measured pixel size when present.
+    """
+    if isinstance(item, dict):
+        data_url = item.get("png")
+        if isinstance(data_url, str) and data_url.startswith("data:image/png;base64,"):
+            import base64
+            import binascii
+
+            try:
+                data = base64.b64decode(data_url.split("base64,", 1)[1], validate=True)
+                if data.startswith(b"\x89PNG"):
+                    return data
+            except (binascii.Error, ValueError):
+                pass  # fall through to the svg path
+        return _svg_to_png(item.get("svg") or "", item.get("w"), item.get("h"))
+    return _svg_to_png(item)  # bare svg string (older clients)
+
+
 def html_to_pdf(html_body, assets_dir=None, math_svgs=(), title="document"):
     """Preview HTML + MathJax SVGs -> PDF bytes (see module note above).
 
-    `math_svgs[k]` is the SVG for every <img data-math="k"> placeholder in
-    `html_body`. Formulas whose SVG fails to convert degrade to a text marker
-    rather than failing the whole export.
+    `math_svgs[k]` describes the <img data-math="k"> placeholder in
+    `html_body`: a bare SVG string, or a dict with "png" (browser-rasterized
+    data URL, preferred) / "svg" + measured "w"/"h" pixels. Formulas that
+    fail to convert degrade to a text marker rather than failing the export.
     """
     import tempfile
 
     math_dir = Path(tempfile.mkdtemp(prefix="mdexport-math-"))
-    for index, svg in enumerate(math_svgs):
-        png = _svg_to_png(svg)
+    for index, item in enumerate(math_svgs):
+        png = _math_item_to_png(item)
         if png is not None:
             (math_dir / f"{index}.png").write_bytes(png)
 
