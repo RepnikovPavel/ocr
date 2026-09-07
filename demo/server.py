@@ -723,7 +723,13 @@ def api_task_export_zip(task_id: str):
 
 @app.get("/api/tasks/{task_id}/export.pdf")
 def api_task_export_pdf(task_id: str):
-    """The task's markdown rendered to a PDF (fitz Story; no extra deps)."""
+    """The task's markdown rendered to a PDF (fitz Story; no extra deps).
+
+    NOTE: Story cannot typeset TeX — formulas come out verbatim in monospace.
+    The UI's "⬇ pdf" button therefore opens a MathJax print view instead
+    (app.js exportPdfPrint); this endpoint remains for API consumers who want
+    a one-call file and can live without typeset math.
+    """
     task = _task_for_export(task_id)
     md = _task_markdown(task)
     if not md:
