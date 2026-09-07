@@ -350,6 +350,13 @@ def test_pdf_export_uses_iframe_mathjax_and_post():
     export_section = app_js.split("/* ------------------------------------------------ export */")[1]
     assert "window.print()" not in export_section
     assert 'window.open("", "_blank")' not in export_section
+    # display equations must NOT carry the inline baseline shift: a negative
+    # vertical-align on a block-level img shifted it below its layout box and
+    # the next paragraph overlapped it (2026-09-07 report)
+    assert "display && valignMatch" in app_js
+    # formulas are rasterized in the browser (canvas): MathJax display svgs
+    # are width="100%" without a viewBox, which cairosvg cannot lay out
+    assert "toDataURL" in app_js and "rasterizeMath" in app_js
 
 
 def test_export_pdf_post_embeds_typeset_formula(mocr):

@@ -613,7 +613,11 @@ async function rasterizeMath(iframe) {
     const widthPt = (rect.width * 0.75).toFixed(1);
     const heightPt = (rect.height * 0.75).toFixed(1);
     const valignMatch = /vertical-align:\s*([-\d.]+)ex/.exec(svg.getAttribute("style") || "");
-    const valignPt = valignMatch ? (parseFloat(valignMatch[1]) * pxPerEx * 0.75).toFixed(1) : "0";
+    // vertical-align is the INLINE baseline shift; on a display equation (an
+    // img alone in its own block) it shifts the image below the box the PDF
+    // layout reserves, so the next paragraph overlaps the image
+    const valignPt = (!display && valignMatch)
+      ? (parseFloat(valignMatch[1]) * pxPerEx * 0.75).toFixed(1) : "0";
 
     // the display-equation svg has width="100%" — pin the measured px size so
     // the canvas rasterization matches what was on screen
