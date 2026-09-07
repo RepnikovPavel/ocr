@@ -36,6 +36,9 @@ label { display: inline-flex; align-items: center; gap: 6px; margin: 3px 8px 3px
 
 #dropzone { border: 2px dashed #5c78ff; border-radius: 10px; padding: 18px; text-align: center; cursor: pointer; margin-bottom: 8px; }
 #dropzone.drag { background: #1a2030; }
+#dropzone:focus { outline: none; border-color: #8fe3a3; }
+#dropzone:focus small { color: #8fe3a3; }
+#dropzone #attach-btn { display: block; margin: 10px auto 0; }
 #doc-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
 
 #viewer { flex: 1; overflow: auto; border: 1px solid #262b38; border-radius: 10px; background: #0a0d13; padding: 12px; }

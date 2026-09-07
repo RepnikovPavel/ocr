@@ -120,6 +120,12 @@ def get_job(job_id):
         return dict(row) if row else None
 
 
+def update_job_num_pages(job_id, num_pages):
+    """Grow an image job as the user appends more screenshots to the batch."""
+    with _connect() as conn:
+        conn.execute("UPDATE jobs SET num_pages=? WHERE id=?", (num_pages, job_id))
+
+
 def list_jobs(session_id, limit=20):
     with _connect() as conn:
         rows = conn.execute(
