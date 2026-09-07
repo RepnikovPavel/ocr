@@ -22,6 +22,9 @@ from pathlib import Path
 import fitz
 
 _CSS = """
+/* NOTE: these font sizes are mirrored in the export iframe in
+   demo/static/app.js (typesetInHiddenFrame) — MathJax scales formulas to the
+   surrounding font, so the two must not drift apart. */
 body { font-family: sans-serif; font-size: 10pt; }
 h1 { font-size: 16pt; } h2 { font-size: 14pt; } h3 { font-size: 12pt; }
 code, pre { font-family: monospace; font-size: 9pt; }

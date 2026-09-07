@@ -537,7 +537,13 @@ async function exportPdf() {
 }
 
 /* Hidden iframe running its own MathJax instance. visibility:hidden (not
-   display:none) so layout still happens and formula sizes are measurable. */
+   display:none) so layout still happens and formula sizes are measurable.
+
+   CRITICAL INVARIANT: the iframe's base font size must equal the PDF's base
+   font size (demo/mdexport.py _CSS: body 10pt). MathJax scales formulas to
+   the surrounding font, so typesetting in an unstyled iframe (16px default)
+   produced formulas ~1.6x bigger than the PDF's 10pt text. 10pt here makes
+   the measured px height convert to PDF points exactly (1pt = 96/72 px). */
 function typesetInHiddenFrame(html) {
   return new Promise((resolve, reject) => {
     const iframe = document.createElement("iframe");
@@ -548,6 +554,12 @@ function typesetInHiddenFrame(html) {
     const doc = iframe.contentDocument;
     doc.open();
     doc.write(`<!doctype html><html><head><meta charset="utf-8">
+<style>
+  /* mirror demo/mdexport.py _CSS font sizes — the invariant above */
+  body { font-size: 10pt; font-family: sans-serif; margin: 0; }
+  h1 { font-size: 16pt; } h2 { font-size: 14pt; } h3 { font-size: 12pt; }
+  code, pre { font-size: 9pt; }
+</style>
 <script>
   window.MathJax = {
     tex: { inlineMath: [['\\\\(', '\\\\)']], displayMath: [['\\\\[', '\\\\]']] },
