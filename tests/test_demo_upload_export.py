@@ -387,6 +387,83 @@ def test_export_pdf_post_validation(mocr):
     assert too_many.status_code == 400
 
 
+# MathJax emits display equations as width="100%" svgs with NO viewBox and no
+# intrinsic size — cairosvg cannot rasterize them unless told the viewport
+# (the "The SVG size is undefined" failure, which used to drop display
+# formulas from the PDF entirely, leaving the "(формула)" marker).
+DISPLAY_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" width="100%" '
+               'height="2.794ex" style="vertical-align: -0.831ex; '
+               'min-width: 67.188ex;"><g stroke="currentColor" '
+               'fill="currentColor" transform="scale(0.016,-0.016)">'
+               '<path d="M10 0 L3000 8000 L6000 0 Z"/></g></svg>')
+
+
+def test_svg_to_png_handles_mathjax_display_svg():
+    from demo import mdexport
+
+    # without a size it genuinely cannot rasterize — this is why the client
+    # must send the measured pixels
+    assert mdexport._svg_to_png(DISPLAY_SVG) is None
+    png = mdexport._svg_to_png(DISPLAY_SVG, width_px=600, height_px=19)
+    assert png is not None and png[:4] == b"\x89PNG"
+
+
+def test_export_pdf_post_with_sized_display_formula(mocr):
+    _, client, _ = mocr
+    task_id = _run_stub_task(client)
+    html = ('<p>текст</p><div style="text-align:center">'
+            '<img data-math="0" style="width:450pt; height:14.25pt;"></div>')
+    res = client.post(f"/api/tasks/{task_id}/export.pdf",
+                      json={"html": html,
+                            "math": [{"svg": DISPLAY_SVG, "w": 600, "h": 19}]})
+    assert res.status_code == 200, res.text
+    import fitz
+    doc = fitz.open("pdf", res.content)
+    assert len(doc[0].get_images()) == 1  # the display formula is embedded
+    doc.close()
+
+
+def test_export_pdf_post_accepts_browser_rasterized_png(mocr):
+    """The primary math payload: a PNG the browser rasterized itself."""
+    import base64
+
+    _, client, _ = mocr
+    task_id = _run_stub_task(client)
+    buf = io.BytesIO()
+    Image.new("RGB", (60, 20), (30, 30, 30)).save(buf, "PNG")
+    data_url = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    res = client.post(f"/api/tasks/{task_id}/export.pdf",
+                      json={"html": '<p>формула: <img data-math="0" '
+                                    'style="width:45pt; height:15pt;"></p>',
+                            "math": [{"png": data_url, "w": 60, "h": 20}]})
+    assert res.status_code == 200, res.text
+    import fitz
+    doc = fitz.open("pdf", res.content)
+    assert len(doc[0].get_images()) == 1
+    doc.close()
+    # a corrupt data url degrades to the marker instead of failing
+    bad = client.post(f"/api/tasks/{task_id}/export.pdf",
+                      json={"html": '<p>x <img data-math="0"></p>',
+                            "math": [{"png": "data:image/png;base64,!!!"}]})
+    assert bad.status_code == 200
+    doc = fitz.open("pdf", bad.content)
+    assert "формула" in doc[0].get_text()
+    doc.close()
+
+
+def test_mathjax_tex_extensions_vendored():
+    """The tex-svg bundle auto-loads TeX extensions from
+    /static/input/tex/extensions/ on demand; without the vendored files any
+    \\boldsymbol formula renders as raw red TeX in the preview and kills the
+    pdf export ("Can't load .../boldsymbol.js")."""
+    from pathlib import Path
+
+    ext = (Path(__file__).resolve().parents[1]
+           / "demo" / "static" / "input" / "tex" / "extensions")
+    for name in ("boldsymbol", "mathtools", "cancel", "braket", "unicode"):
+        assert (ext / f"{name}.js").is_file(), name
+
+
 def test_html_to_pdf_sanitizes_and_degrades(tmp_path):
     from demo import mdexport
 

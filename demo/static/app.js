@@ -515,7 +515,7 @@ async function exportPdf() {
       `<div${i < pages.length - 1 ? ' style="page-break-after: always"' : ""}>${h}</div>`).join("");
 
     const iframe = await typesetInHiddenFrame(html);
-    const svgs = extractMathSvgs(iframe);
+    const svgs = await rasterizeMath(iframe);
     const body = iframe.contentDocument.body.innerHTML;
     iframe.remove();
 
@@ -548,7 +548,10 @@ function typesetInHiddenFrame(html) {
   return new Promise((resolve, reject) => {
     const iframe = document.createElement("iframe");
     iframe.setAttribute("style",
-      "position:absolute; left:-10000px; top:0; width:800px; height:600px; visibility:hidden;");
+      "position:absolute; left:-10000px; top:0; width:697px; height:600px; visibility:hidden;");
+    // width 697px = the PDF text column (A4 595pt − 2×36pt margins, 1pt =
+    // 96/72 px): MathJax display equations are width:100% svgs, so they must
+    // be typeset at the width they will occupy in the PDF
     iframe.setAttribute("aria-hidden", "true");
     document.body.appendChild(iframe);
     const doc = iframe.contentDocument;
@@ -590,24 +593,55 @@ function typesetInHiddenFrame(html) {
 }
 
 /* Replace every typeset mjx-container with an <img data-math="K"> placeholder
-   carrying the measured size; return the SVGs in placeholder order. */
-function extractMathSvgs(iframe) {
+   carrying the measured size; rasterize each formula to PNG in the browser and
+   return per-formula {svg, png, w, h} records in placeholder order.
+   Rasterizing here (canvas) rather than on the server sidesteps the svgs that
+   defeat cairosvg: MathJax display equations are width="100%" with nested
+   <svg> elements and no viewBox — only a real browser engine lays them out
+   correctly. The svg is still sent as a server-side fallback. */
+async function rasterizeMath(iframe) {
   const doc = iframe.contentDocument;
-  const svgs = [];
-  doc.querySelectorAll("mjx-container").forEach((container) => {
+  const SCALE = 3;
+  const items = [];
+  for (const container of doc.querySelectorAll("mjx-container")) {
     const svg = container.querySelector("svg");
-    if (!svg) { container.remove(); return; }
+    if (!svg) { container.remove(); continue; }
     const rect = container.getBoundingClientRect();
     const display = container.hasAttribute("display");
     const heightMatch = /([\d.]+)ex/.exec(svg.getAttribute("height") || "");
     const pxPerEx = (heightMatch && rect.height) ? rect.height / parseFloat(heightMatch[1]) : 8;
+    const widthPt = (rect.width * 0.75).toFixed(1);
     const heightPt = (rect.height * 0.75).toFixed(1);
     const valignMatch = /vertical-align:\s*([-\d.]+)ex/.exec(svg.getAttribute("style") || "");
     const valignPt = valignMatch ? (parseFloat(valignMatch[1]) * pxPerEx * 0.75).toFixed(1) : "0";
-    svgs.push(svg.outerHTML);
+
+    // the display-equation svg has width="100%" — pin the measured px size so
+    // the canvas rasterization matches what was on screen
+    const clone = svg.cloneNode(true);
+    clone.setAttribute("width", `${Math.max(1, rect.width)}px`);
+    clone.setAttribute("height", `${Math.max(1, rect.height)}px`);
+    clone.removeAttribute("style");
+    const url = URL.createObjectURL(new Blob([clone.outerHTML], {type: "image/svg+xml"}));
+    const png = await new Promise((resolve) => {
+      const image = new Image();
+      image.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(rect.width * SCALE));
+        canvas.height = Math.max(1, Math.round(rect.height * SCALE));
+        const ctx = canvas.getContext("2d");
+        ctx.scale(SCALE, SCALE);
+        ctx.drawImage(image, 0, 0, rect.width, rect.height);
+        URL.revokeObjectURL(url);
+        resolve(canvas.toDataURL("image/png"));
+      };
+      image.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+      image.src = url;
+    });
+
+    items.push({svg: svg.outerHTML, png, w: rect.width, h: rect.height});
     const img = doc.createElement("img");
-    img.setAttribute("data-math", String(svgs.length - 1));
-    img.setAttribute("style", `height:${heightPt}pt; vertical-align:${valignPt}pt;`);
+    img.setAttribute("data-math", String(items.length - 1));
+    img.setAttribute("style", `width:${widthPt}pt; height:${heightPt}pt; vertical-align:${valignPt}pt;`);
     img.setAttribute("alt", "(формула)");
     if (display) {
       const wrap = doc.createElement("div");
@@ -617,8 +651,8 @@ function extractMathSvgs(iframe) {
     } else {
       container.replaceWith(img);
     }
-  });
-  return svgs;
+  }
+  return items;
 }
 
 /* ------------------------------------------------ results */
