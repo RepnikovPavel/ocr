@@ -326,3 +326,19 @@ def test_dropzone_click_focuses_and_never_opens_the_picker():
     # paste is handled at document level: a non-editable div does not get
     # paste events in every browser
     assert 'document.addEventListener("paste"' in app_js
+
+
+def test_pdf_export_uses_mathjax_print_view():
+    """Regression (2026-09-07): the server-side fitz Story PDF cannot typeset
+    TeX, so formulas exported as monospace source. The UI export must open the
+    MathJax print view (same renderer as the preview) instead."""
+    from pathlib import Path
+
+    static = Path(__file__).resolve().parents[1] / "demo" / "static"
+    app_js = (static / "app.js").read_text(encoding="utf-8")
+    index = (static / "index.html").read_text(encoding="utf-8")
+    assert 'id="export-pdf"' in index
+    assert '$("export-pdf").onclick = () => exportPdfPrint()' in app_js
+    assert "/static/tex-svg.js" in app_js      # MathJax inside the print window
+    assert "MathJax.typesetPromise" in app_js  # typeset before printing
+    assert "window.print()" in app_js
