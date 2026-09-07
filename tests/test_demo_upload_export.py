@@ -401,6 +401,15 @@ def test_html_to_pdf_sanitizes_and_degrades(tmp_path):
     assert "ok" in text and "alert" not in text and "формула" in text
 
 
+def test_index_html_is_never_cached(mocr):
+    """The page pins versioned static URLs (?v=...), which only reach the
+    browser when index.html itself is revalidated — pin the no-cache header."""
+    _, client, _ = mocr
+    res = client.get("/")
+    assert res.status_code == 200
+    assert "no-cache" in res.headers.get("cache-control", "")
+
+
 def test_iframe_font_sizes_match_pdf_css():
     """Regression (2026-09-07): MathJax scales formulas to the surrounding
     font; the hidden typeset iframe ran at the browser default 16px while the

@@ -787,7 +787,10 @@ def index():
     html = (Path(__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
     html = html.replace("__VARIANT__", VARIANT)
     html = html.replace("__TITLE__", VARIANTS[VARIANT]["title"])
-    return HTMLResponse(html)
+    # no-cache: the page pins versioned app.js/style.css URLs (?v=...), which
+    # only reach the browser when the HTML itself is revalidated. A heuristically
+    # cached index.html once kept a pre-fix app.js alive through a deploy.
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
 @app.get("/arxiv")
@@ -795,7 +798,7 @@ def arxiv_ui():
     """Arxiv pipeline progress/status panel (separate page from the OCR demo)."""
     html = (Path(__file__).parent / "static" / "arxiv.html").read_text(encoding="utf-8")
     html = html.replace("__TITLE__", "arxiv quant/algo-trading pipeline")
-    return HTMLResponse(html)
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
 if __name__ == "__main__":
