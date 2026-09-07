@@ -26,6 +26,15 @@ def get_matrix(page, dpi_default=200, max_pixels=11289600):
     mat = fitz.Matrix(factor, factor)
     return mat
 
+# Upper bound for one rendered page side. get_matrix caps the AREA, so a very
+# large page (a big-monitor screenshot becomes a 1pt-per-px PDF page, an A0
+# poster) can still render with a side far beyond this. The old fallback for
+# that case re-rendered at 72 dpi — which for a point-size page is a FULL-SIZE
+# render (a 16384pt-wide page -> a 16384px pixmap, ~10x the cap) and is exactly
+# the OOM path big screenshots hit. Rescale the matrix down instead.
+MAX_RENDER_SIDE = 4500
+
+
 def fitz_doc_to_image(doc, target_dpi=200, origin_dpi=None) -> dict:
     """Convert fitz.Document to image, Then convert the image to numpy array.
 
@@ -37,15 +46,15 @@ def fitz_doc_to_image(doc, target_dpi=200, origin_dpi=None) -> dict:
         dict:  {'img': numpy array, 'width': width, 'height': height }
     """
     from PIL import Image
-    # mat = fitz.Matrix(target_dpi / 72, target_dpi / 72)
     mat = get_matrix(doc, target_dpi)
     pm = doc.get_pixmap(matrix=mat, alpha=False)
     if pm.width == 0 or pm.height == 0:
         print(f"image is empty loading from pdf, skip")
         return None
 
-    if pm.width > 4500 or pm.height > 4500:
-        mat = fitz.Matrix(72 / 72, 72 / 72)  # use fitz default dpi
+    if pm.width > MAX_RENDER_SIDE or pm.height > MAX_RENDER_SIDE:
+        scale = MAX_RENDER_SIDE / max(pm.width, pm.height)
+        mat = fitz.Matrix(mat.a * scale, mat.d * scale)
         pm = doc.get_pixmap(matrix=mat, alpha=False)
 
     image = Image.frombytes('RGB', (pm.width, pm.height), pm.samples)

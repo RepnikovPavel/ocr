@@ -655,9 +655,15 @@ class DemoWorker(threading.Thread):
             int(bbox[2] * scale_x), int(bbox[3] * scale_y),
         ]
 
-    def _input_path(self, job):
+    def _input_path(self, job, page=0):
         job_dir = self.jobs_dir / job["id"]
-        matches = list(job_dir.glob("input.*"))
+        if job["kind"] == "image":
+            # multi-image jobs store one file per page (input_000.png, ...);
+            # jobs created before that scheme have a single legacy input.png
+            indexed = sorted(job_dir.glob(f"input_{page:03d}.*"))
+            if indexed:
+                return indexed[0]
+        matches = sorted(job_dir.glob("input.*"))
         if not matches:
             raise FileNotFoundError(f"no input file for job {job['id']}")
         return matches[0]
@@ -669,7 +675,7 @@ class DemoWorker(threading.Thread):
         job = db.get_job(task["job_id"])
         if job is None:
             raise ValueError(f"job {task['job_id']} not found")
-        input_path = self._input_path(job)
+        pdf_input = self._input_path(job) if job["kind"] == "pdf" else None
         out_dir = self.jobs_dir / job["id"] / "out"
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -711,7 +717,7 @@ class DemoWorker(threading.Thread):
             started = time.time()
             self.live_page = page_no
             if job["kind"] == "pdf":
-                rendered = load_pdf_pages(str(input_path), dpi=dpi, page_ids=[page_no])
+                rendered = load_pdf_pages(str(pdf_input), dpi=dpi, page_ids=[page_no])
                 if not rendered:
                     raise ValueError(f"page {page_no} did not render")
                 origin_image = rendered[0][1]
@@ -722,7 +728,7 @@ class DemoWorker(threading.Thread):
                     custom_prompt=custom_prompt, temperature=temperature,
                 )
             else:
-                origin_image = fetch_image(str(input_path))
+                origin_image = fetch_image(str(self._input_path(job, page_no)))
                 fitz_preprocess = PROMPT_TO_FITZ_PREPROCESS.get(prompt_mode, False)
                 page_bbox = self._scale_bbox(bbox, params.get("bbox_view_size"), origin_image)
                 page_result = self.parser._parse_single_image(

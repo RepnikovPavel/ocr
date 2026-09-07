@@ -111,10 +111,15 @@ const HELP = {
     у отдельной модели <b>dots.mocr-svg</b>, это другая демка (ссылка в шапке;
     для неё нужен проброшенный второй порт).</p>
     <ol>
-      <li>Перетащите <b>PDF или картинку</b> (jpg/png) в зону слева.</li>
+      <li>Перетащите <b>PDF или картинки</b> (jpg/png) в зону слева, нажмите
+      <b>«прикрепить файлы»</b> или <b>кликните по зоне и вставьте скриншот (Ctrl+V)</b>.
+      Изображения накапливаются пачкой: каждое следующее становится новой страницей —
+      потом обрабатываются по очереди.</li>
       <li>Отметьте галочками страницы для инференса (можно кликать по подписи страницы).</li>
       <li>Выберите режим (скилл модели) и нажмите «Запустить».</li>
     </ol>
+    <p>Результат можно выгрузить кнопками <b>⬇ zip</b> (markdown + картинки + layout JSON)
+    и <b>⬇ pdf</b> (PDF, отрендеренный из markdown) в секции «Результаты».</p>
     <p>Скиллы:</p>
     <ul>
       <li><b>layout_all</b> — блоки страницы: bbox + категория + текст → Markdown (основной режим);</li>
@@ -198,19 +203,48 @@ function onModeChange() {
 /* ------------------------------------------------ upload & viewer */
 
 const dropzone = $("dropzone");
-dropzone.onclick = () => $("file-input").click();
-$("file-input").onchange = () => { if ($("file-input").files[0]) upload($("file-input").files[0]); };
+// Click focuses the zone so the next Ctrl+V pastes a screenshot straight in;
+// the file picker lives on the separate "прикрепить" button.
+dropzone.onclick = () => dropzone.focus();
+$("attach-btn").onclick = (e) => { e.stopPropagation(); $("file-input").click(); };
+$("file-input").onchange = () => {
+  handleFiles([...$("file-input").files]);
+  $("file-input").value = ""; // same file again must still fire onchange
+};
 dropzone.ondragover = (e) => { e.preventDefault(); dropzone.classList.add("drag"); };
 dropzone.ondragleave = () => dropzone.classList.remove("drag");
 dropzone.ondrop = (e) => {
   e.preventDefault(); dropzone.classList.remove("drag");
-  if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]);
+  handleFiles([...e.dataTransfer.files]);
 };
+// paste fires on the focused element and bubbles; the dropzone is focusable
+dropzone.addEventListener("paste", (e) => {
+  const files = [...(e.clipboardData ? e.clipboardData.files : [])];
+  if (files.length) { e.preventDefault(); handleFiles(files); }
+});
 
-async function upload(file) {
+const isImageFile = (f) => /^image\/(png|jpe?g)$/i.test(f.type) || /\.(png|jpe?g)$/i.test(f.name);
+const isPdfFile = (f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name);
+
+async function handleFiles(files) {
+  files = files.filter((f) => isImageFile(f) || isPdfFile(f));
+  if (!files.length) return;
+  const images = files.filter(isImageFile);
+  if (files.some(isPdfFile) || !images.length) {
+    // a PDF always starts a fresh job (the server rejects pdf+image mixes)
+    await upload(files);
+  } else if (state.job && state.job.kind === "image") {
+    // screenshots keep accumulating: each one becomes the next page
+    await appendImages(images);
+  } else {
+    await upload(images);
+  }
+}
+
+async function upload(files) {
   $("run-error").textContent = "";
   const body = new FormData();
-  body.append("file", file);
+  for (const f of files) body.append("file", f);
   const res = await fetch("/api/upload", {method: "POST", body});
   if (!res.ok) { $("run-error").textContent = await res.text(); return; }
   const job = await res.json();
@@ -219,6 +253,22 @@ async function upload(file) {
   state.bbox = null;
   $("doc-name").textContent = `${job.filename} · ${job.num_pages} стр.`;
   $("doc-toolbar").hidden = false;
+  renderViewer();
+}
+
+async function appendImages(files) {
+  $("run-error").textContent = "";
+  const body = new FormData();
+  for (const f of files) body.append("file", f);
+  const res = await fetch(`/api/jobs/${state.job.job_id}/images`, {method: "POST", body});
+  if (!res.ok) { $("run-error").textContent = await res.text(); return; }
+  const data = await res.json();
+  const before = new Set(state.job.views.map((v) => v.page));
+  state.job.num_pages = data.num_pages;
+  state.job.views = data.views;
+  for (const v of data.views) if (!before.has(v.page)) state.selected.add(v.page);
+  state.bbox = null;
+  $("doc-name").textContent = `${state.job.filename} · ${data.num_pages} стр.`;
   renderViewer();
 }
 
@@ -422,6 +472,15 @@ function renderLiveTps(live) {
 
 window.cancelTask = (id) => fetch(`/api/tasks/${id}/cancel`, {method: "POST"}).then(pollState);
 
+/* ------------------------------------------------ export */
+
+function exportTask(fmt) {
+  if (!state.resultTaskId) return;
+  window.open(`/api/tasks/${state.resultTaskId}/export.${fmt}`, "_blank");
+}
+$("export-zip").onclick = () => exportTask("zip");
+$("export-pdf").onclick = () => exportTask("pdf");
+
 /* ------------------------------------------------ results */
 
 /* Render model markdown with LaTeX math.
@@ -523,6 +582,7 @@ window.watchTask = function watchTask(taskId) {
    not jump and already-typeset math / open tabs stay put during generation. */
 function renderResults(task) {
   $("result-task").textContent = `· ${task.prompt_mode} · ${task.status}`;
+  $("export-row").hidden = !task.result.length;
   const box = $("results");
 
   if (state.resultTaskId !== task.id) {

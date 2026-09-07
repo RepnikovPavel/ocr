@@ -26,9 +26,11 @@
 
   <main>
     <section id="left">
-      <div id="dropzone">
-        <strong>Перетащите PDF или изображение</strong> <small>или кликните</small>
-        <input id="file-input" type="file" accept=".pdf,image/png,image/jpeg" hidden>
+      <div id="dropzone" tabindex="0" title="клик — фокус для вставки из буфера">
+        <strong>Перетащите PDF или изображения</strong>
+        <small>клик сюда — затем Ctrl+V для вставки скриншота</small>
+        <button id="attach-btn" class="secondary">📎 прикрепить файлы</button>
+        <input id="file-input" type="file" accept=".pdf,image/png,image/jpeg" multiple hidden>
       </div>
       <div id="doc-toolbar" hidden>
         <span id="doc-name" class="muted"></span>
@@ -72,7 +74,12 @@
       </div>
 
       <div class="panel">
-        <h3>Результаты <span id="result-task" class="muted"></span></h3>
+        <h3>Результаты <span id="result-task" class="muted"></span>
+          <span id="export-row" hidden>
+            <button id="export-zip" class="tiny secondary" title="zip-архив с markdown, картинками и layout JSON (как у agent API)">⬇ zip</button>
+            <button id="export-pdf" class="tiny secondary" title="PDF, отрендеренный из распаршенного markdown">⬇ pdf</button>
+          </span>
+        </h3>
         <div id="results"><span class="muted">Выберите страницы слева и запустите задачу.</span></div>
       </div>
     </section>

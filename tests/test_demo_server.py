@@ -20,6 +20,10 @@ def load_app(tmp_path, monkeypatch, variant="mocr", autostart="0"):
     monkeypatch.setenv("CKPTDIR", "/nonexistent")
     monkeypatch.setenv("DEMO_PEER_PORT", "8602" if variant == "mocr" else "8601")
     monkeypatch.setenv("DEMO_PEER_TITLE", "peer demo")
+    # the watchdog thread is never stopped and outlives its server instance;
+    # from a previous test it would rebuild a worker against the CURRENT
+    # global db and steal queued tasks — a cross-test flake source
+    monkeypatch.setenv("DEMO_SKIP_WATCHDOG", "1")
     sys.modules.pop("demo.server", None)
     server = importlib.import_module("demo.server")
     repo_root = pathlib.Path(__file__).resolve().parents[1]

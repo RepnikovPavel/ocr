@@ -26,19 +26,22 @@ Environment:
 
 from __future__ import annotations
 
+import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import time
 import traceback
 import uuid
+import zipfile
 from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
@@ -71,6 +74,15 @@ VIEW_DPI = 144  # page images shown in the viewer
 # cookies are host-scoped — a shared name would rotate sessions on each switch
 SESSION_COOKIE = f"demo_sid_{os.environ.get('DEMO_VARIANT', 'mocr')}"
 MAX_UPLOAD_MB = 512
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
+# Viewer render cap: a 4-8K screenshot is shown downscaled, the ORIGINAL file
+# is kept on disk for inference. bbox scaling (bbox_view_size) stays correct
+# because the recorded view dimensions are what the user actually drew on.
+VIEW_MAX_DIM = 2048
+# Decode guard for absurd uploads (PIL's own bomb limit is ~178 MP; fail earlier
+# with a readable message). The inference image is separately capped by the
+# parser's max_pixels, so this limit is about RAM in the demo process.
+MAX_IMAGE_PIXELS = 100_000_000
 
 VARIANTS = {
     "mocr": {
@@ -362,67 +374,112 @@ def api_state(request: Request):
     }
 
 
-@app.post("/api/upload")
-def api_upload(request: Request, file: UploadFile = File(...)):
-    # sync def: FastAPI runs it in the threadpool — copying a 512MB upload and
-    # rendering every PDF page must not block the event loop for other clients
-    suffix = Path(file.filename or "upload.bin").suffix.lower()
-    if suffix not in {".pdf", ".jpg", ".jpeg", ".png"}:
-        raise HTTPException(400, f"unsupported file type: {suffix}")
+def _check_upload_size(file):
     if file.size and file.size > MAX_UPLOAD_MB * 1024 * 1024:
-        raise HTTPException(413, f"file too large (> {MAX_UPLOAD_MB}MB)")
+        raise HTTPException(413, f"file too large (> {MAX_UPLOAD_MB}MB): {file.filename}")
 
-    import fitz
 
-    kind = "pdf" if suffix == ".pdf" else "image"
-    job_id = uuid.uuid4().hex[:12]
-    job_dir = JOBS_DIR / job_id
-    job_dir.mkdir(parents=True)
-    dest = job_dir / f"input{suffix}"
+def _save_image_page(job_dir, file, index, url_prefix):
+    """Store one uploaded image as page `index` of an image job.
+
+    The original bytes are kept for inference (the parser caps them at
+    max_pixels itself); the viewer gets a downscaled JPEG so a bank of 4-8K
+    screenshots does not OOM the browser tab or the RAM of this process.
+    """
+    suffix = Path(file.filename or "image.png").suffix.lower()
+    dest = job_dir / f"input_{index:03d}{suffix}"
     with dest.open("wb") as handle:
         shutil.copyfileobj(file.file, handle)
 
-    views = []
-    if kind == "pdf":
-        try:
-            doc = fitz.open(str(dest))
-        except Exception as error:
-            shutil.rmtree(job_dir, ignore_errors=True)
-            raise HTTPException(400, f"broken pdf: {error}")
-        num_pages = doc.page_count
-        for index in range(num_pages):
-            pix = doc[index].get_pixmap(dpi=VIEW_DPI)
-            view_path = job_dir / f"view_{index:03d}.jpg"
-            pix.save(str(view_path), jpg_quality=85)
-            views.append({
-                "page": index,
-                "url": f"/files/{job_id}/view_{index:03d}.jpg",
-                "width": pix.width,
-                "height": pix.height,
-            })
-        doc.close()
-    else:
-        from PIL import Image
+    from PIL import Image
 
-        try:
-            with Image.open(dest) as img:
-                img = img.convert("RGB")
-                width, height = img.size
-                view_path = job_dir / "view_000.jpg"
-                img.save(view_path, "JPEG", quality=90)
-        except Exception as error:
-            shutil.rmtree(job_dir, ignore_errors=True)
-            raise HTTPException(400, f"broken image: {error}")
-        num_pages = 1
+    try:
+        with Image.open(dest) as img:
+            img = img.convert("RGB")
+            if img.width * img.height > MAX_IMAGE_PIXELS:
+                raise HTTPException(
+                    400, f"image too large: {img.width}x{img.height} px "
+                         f"(limit {MAX_IMAGE_PIXELS // 1_000_000} MP)")
+            view = img
+            if max(img.size) > VIEW_MAX_DIM:
+                scale = VIEW_MAX_DIM / max(img.size)
+                view = img.resize((max(1, round(img.width * scale)),
+                                   max(1, round(img.height * scale))))
+            view_path = job_dir / f"view_{index:03d}.jpg"
+            view.save(view_path, "JPEG", quality=90)
+            width, height = view.size
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(400, f"broken image: {error}")
+    return {"page": index, "url": f"{url_prefix}/view_{index:03d}.jpg",
+            "width": width, "height": height}
+
+
+def _build_pdf_job(job_dir, file, url_prefix):
+    dest = job_dir / "input.pdf"
+    with dest.open("wb") as handle:
+        shutil.copyfileobj(file.file, handle)
+
+    import fitz
+
+    try:
+        doc = fitz.open(str(dest))
+    except Exception as error:
+        raise HTTPException(400, f"broken pdf: {error}")
+    num_pages = doc.page_count
+    views = []
+    for index in range(num_pages):
+        pix = doc[index].get_pixmap(dpi=VIEW_DPI)
+        view_path = job_dir / f"view_{index:03d}.jpg"
+        pix.save(str(view_path), jpg_quality=85)
         views.append({
-            "page": 0,
-            "url": f"/files/{job_id}/view_000.jpg",
-            "width": width,
-            "height": height,
+            "page": index,
+            "url": f"{url_prefix}/view_{index:03d}.jpg",
+            "width": pix.width,
+            "height": pix.height,
         })
+    doc.close()
+    return "pdf", num_pages, views
+
+
+@app.post("/api/upload")
+def api_upload(request: Request, file: list[UploadFile] = File(...)):
+    """One PDF, or a batch of images that becomes one multi-page job.
+
+    The form field is `file` repeated: a single-file client posts one field
+    and gets the old one-page job; the UI posts several when the user
+    attaches or pastes a batch of screenshots at once.
+    """
+    # sync def: FastAPI runs it in the threadpool — copying uploads and
+    # rendering pages must not block the event loop for other clients
+    suffixes = [Path(f.filename or "upload.bin").suffix.lower() for f in file]
+    bad = [s for s in suffixes if s not in {".pdf"} | IMAGE_SUFFIXES]
+    if bad:
+        raise HTTPException(400, f"unsupported file type: {bad[0]}")
+    for f in file:
+        _check_upload_size(f)
+    if ".pdf" in suffixes and len(file) > 1:
+        raise HTTPException(400, "a PDF is uploaded on its own, not mixed with images")
+
+    kind = "pdf" if suffixes == [".pdf"] else "image"
+    job_id = uuid.uuid4().hex[:12]
+    job_dir = JOBS_DIR / job_id
+    job_dir.mkdir(parents=True)
+    url_prefix = f"/files/{job_id}"
+    try:
+        if kind == "pdf":
+            kind, num_pages, views = _build_pdf_job(job_dir, file[0], url_prefix)
+        else:
+            views = [_save_image_page(job_dir, f, i, url_prefix)
+                     for i, f in enumerate(file)]
+            num_pages = len(views)
+    except Exception:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise
 
     # persist metadata; the directory is renamed to the db job id
-    real_job_id = db.create_job(request.state.sid, file.filename or dest.name, kind, num_pages)
+    real_job_id = db.create_job(request.state.sid, file[0].filename or "upload", kind, num_pages)
     new_dir = JOBS_DIR / real_job_id
     job_dir.rename(new_dir)
     for view in views:
@@ -430,7 +487,37 @@ def api_upload(request: Request, file: UploadFile = File(...)):
 
     (new_dir / "views.json").write_text(json.dumps(views), encoding="utf-8")
     return {"job_id": real_job_id, "kind": kind, "num_pages": num_pages,
-            "filename": file.filename, "views": views}
+            "filename": file[0].filename, "views": views}
+
+
+@app.post("/api/jobs/{job_id}/images")
+def api_append_images(request: Request, job_id: str, file: list[UploadFile] = File(...)):
+    """Append more images to an existing image job.
+
+    The user pastes/attaches screenshots one by one; each becomes the next
+    page of the same job so the batch is then parsed page by page, in order.
+    """
+    job = db.get_job(job_id)
+    if job is None:
+        raise HTTPException(404, "job not found")
+    if job["kind"] != "image":
+        raise HTTPException(400, "only image jobs accept appended images")
+    for f in file:
+        suffix = Path(f.filename or "image.png").suffix.lower()
+        if suffix not in IMAGE_SUFFIXES:
+            raise HTTPException(400, f"unsupported file type: {suffix} (images only)")
+        _check_upload_size(f)
+
+    job_dir = JOBS_DIR / job_id
+    views_path = job_dir / "views.json"
+    views = json.loads(views_path.read_text(encoding="utf-8")) if views_path.exists() else []
+    index = max(job["num_pages"], len(views))
+    for f in file:
+        views.append(_save_image_page(job_dir, f, index, f"/files/{job_id}"))
+        index += 1
+    views_path.write_text(json.dumps(views), encoding="utf-8")
+    db.update_job_num_pages(job_id, index)
+    return {"job_id": job_id, "kind": "image", "num_pages": index, "views": views}
 
 
 @app.get("/api/jobs/{job_id}")
@@ -569,6 +656,86 @@ def api_raw(path: str):
     if target.stat().st_size > 20 * 1024 * 1024:
         raise HTTPException(413, "artifact too large")
     return JSONResponse({"path": path, "content": target.read_text(encoding="utf-8", errors="replace")})
+
+
+# ---------------------------------------------------------------- export
+
+def _task_for_export(task_id):
+    task = db.get_task(task_id)
+    if task is None:
+        raise HTTPException(404, "task not found")
+    if not task["result"]:
+        raise HTTPException(400, "task has no results yet")
+    return task
+
+
+def _task_markdown(task):
+    """The task's pages as one markdown document, in page order."""
+    pieces = []
+    for page in sorted(task["result"], key=lambda p: p.get("page_no", 0)):
+        path = page.get("md_content_path")
+        if path and Path(path).is_file():
+            pieces.append(Path(path).read_text(encoding="utf-8"))
+    return "\n\n".join(pieces)
+
+
+@app.get("/api/tasks/{task_id}/export.zip")
+def api_task_export_zip(task_id: str):
+    """The task result as one ZIP, mirroring the agent-API bundle shape:
+    document.md + meta.json + per-page artifacts + the images the md links."""
+    task = _task_for_export(task_id)
+    out_dir = JOBS_DIR / task["job_id"] / "out"
+    md = _task_markdown(task)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        if md:
+            archive.writestr("document.md", md)
+        archive.writestr("meta.json", json.dumps({
+            "task_id": task_id,
+            "prompt_mode": task["prompt_mode"],
+            "pages": [p.get("page_no") for p in task["result"]],
+            "status": task["status"],
+        }, ensure_ascii=False, indent=2))
+        for page in task["result"]:
+            page_no = page.get("page_no", 0)
+            for key, prefix in (("md_content_path", "pages"),
+                                ("md_content_nohf_path", "pages"),
+                                ("layout_info_path", "layout"),
+                                ("layout_image_path", "layout"),
+                                ("svg_content_path", "svg")):
+                path = page.get(key)
+                if path and Path(path).is_file():
+                    suffix = Path(path).suffix
+                    nohf = "_nohf" if key == "md_content_nohf_path" else ""
+                    archive.write(path, f"{prefix}/page_{page_no + 1:03d}{nohf}{suffix}")
+        # picture crops the markdown links as images/<name>; keep that path so
+        # the archive is self-contained when unpacked
+        for rel in sorted(set(re.findall(r"images/[^\s)\]]+", md))):
+            img_path = out_dir / rel
+            if img_path.is_file():
+                archive.write(img_path, rel)
+    buffer.seek(0)
+    filename = f"{task_id}-{task['prompt_mode']}.zip"
+    return StreamingResponse(
+        buffer, media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@app.get("/api/tasks/{task_id}/export.pdf")
+def api_task_export_pdf(task_id: str):
+    """The task's markdown rendered to a PDF (fitz Story; no extra deps)."""
+    task = _task_for_export(task_id)
+    md = _task_markdown(task)
+    if not md:
+        raise HTTPException(400, "task has no markdown to render")
+    from demo import mdexport
+
+    out_dir = JOBS_DIR / task["job_id"] / "out"
+    pdf = mdexport.markdown_to_pdf(md, assets_dir=out_dir, title=f"task {task_id}")
+    filename = f"{task_id}-{task['prompt_mode']}.pdf"
+    return Response(
+        content=pdf, media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 app.mount("/files", StaticFiles(directory=str(JOBS_DIR)), name="files")
