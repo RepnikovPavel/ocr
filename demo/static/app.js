@@ -217,8 +217,14 @@ dropzone.ondrop = (e) => {
   e.preventDefault(); dropzone.classList.remove("drag");
   handleFiles([...e.dataTransfer.files]);
 };
-// paste fires on the focused element and bubbles; the dropzone is focusable
-dropzone.addEventListener("paste", (e) => {
+// Paste is listened for at document level: non-editable focus targets (our
+// dropzone div) do not receive paste events in every browser, and a missed
+// paste reads as "the feature is broken". Text fields keep their normal paste
+// (custom prompt, etc.) — everywhere else an image in the clipboard goes
+// straight into the upload flow.
+document.addEventListener("paste", (e) => {
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
   const files = [...(e.clipboardData ? e.clipboardData.files : [])];
   if (files.length) { e.preventDefault(); handleFiles(files); }
 });
