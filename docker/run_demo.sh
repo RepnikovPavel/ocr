@@ -20,6 +20,16 @@ bind_addr="${DOTS_MOCR_BIND:-127.0.0.1}"
 # deploying from a clone means — and avoids rebuilding a 60 GB image to change a
 # few lines. Set 0 to run the code baked into the image instead.
 mount_repo="${DOTS_MOCR_MOUNT_REPO:-1}"
+# Notes for the bench-cu126 image (the CUDA-12 driver fallback):
+# - it has no WORKDIR and no PYTHONPATH, so the flags below pin both — without
+#   them `python3 -m demo.server` dies with ModuleNotFoundError.
+# - the container runs as the host uid, which has no /etc/passwd entry inside;
+#   torch's inductor cache-dir probe calls getpass.getuser() and crashes the
+#   model load ("getpwuid(): uid not found", surfacing as a mega-cache
+#   double-registration AssertionError on retry). USER/LOGNAME short-circuit
+#   getpass via the environment.
+# - it ships no C compiler, so the default flex_attention backend (triton
+#   compile) fails at generation time; run with DEMO_ATTN_IMPLEMENTATION=sdpa.
 
 [[ -d "${ckpt_dir}" ]] || { echo "checkpoint directory does not exist: ${ckpt_dir}" >&2; exit 2; }
 [[ -n "${state_dir}" ]] || { echo "state directory is required (for outputs + sessions)" >&2; exit 2; }
@@ -46,8 +56,12 @@ docker run -d \
     --gpus "${gpu_request}" \
     --network bridge \
     --publish "${bind_addr}:${port}:7860/tcp" \
+    --workdir /opt/dots-mocr \
     --env HOME=/tmp \
+    --env "USER=${USER:-dots}" \
+    --env "LOGNAME=${USER:-dots}" \
     --env TRITON_CACHE_DIR=/tmp/triton-cache \
+    --env TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor-cache \
     --env HF_HOME=/models \
     --env HF_HUB_CACHE=/models \
     --env HF_HUB_OFFLINE=1 \
@@ -56,6 +70,7 @@ docker run -d \
     --env CKPTDIR=/models \
     --env DEMO_STATE_DIR=/state \
     --env DEMO_ENGINE="${demo_engine}" \
+    --env PYTHONPATH=/opt/dots-mocr/src:/opt/dots-mocr \
     ${DEMO_VLLM_URL:+--env DEMO_VLLM_URL="${DEMO_VLLM_URL}"} \
     ${DEMO_ATTN_IMPLEMENTATION:+--env DEMO_ATTN_IMPLEMENTATION="${DEMO_ATTN_IMPLEMENTATION}"} \
     --env PORT=7860 \
