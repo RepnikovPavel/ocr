@@ -39,6 +39,15 @@ ckpt_dir="$(cd "${ckpt_dir}" && pwd -P)"
 state_dir="$(cd "${state_dir}" && pwd -P)"
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+artifact_mounts=()
+if [[ -n "${DOTS_MOCR_ARTIFACTS_DIR:-}" ]]; then
+    mkdir -p "${DOTS_MOCR_ARTIFACTS_DIR}/jobs" "${DOTS_MOCR_ARTIFACTS_DIR}/cache"
+    artifacts_dir=$(cd "${DOTS_MOCR_ARTIFACTS_DIR}" && pwd -P)
+    artifact_mounts=(
+        --mount "type=bind,src=${artifacts_dir}/jobs,dst=/state/jobs"
+        --mount "type=bind,src=${artifacts_dir}/cache,dst=/state/cache"
+    )
+fi
 
 docker rm -f "${container_name}" >/dev/null 2>&1 || true
 
@@ -60,8 +69,9 @@ docker run -d \
     --env HOME=/tmp \
     --env "USER=${USER:-dots}" \
     --env "LOGNAME=${USER:-dots}" \
-    --env TRITON_CACHE_DIR=/tmp/triton-cache \
-    --env TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor-cache \
+    --env TRITON_CACHE_DIR=/state/cache/triton \
+    --env TORCHINDUCTOR_CACHE_DIR=/state/cache/torchinductor \
+    --env PYTHONDONTWRITEBYTECODE=1 \
     --env HF_HOME=/models \
     --env HF_HUB_CACHE=/models \
     --env HF_HUB_OFFLINE=1 \
@@ -70,6 +80,8 @@ docker run -d \
     --env CKPTDIR=/models \
     --env DEMO_STATE_DIR=/state \
     --env DEMO_ENGINE="${demo_engine}" \
+    --env DEMO_IDLE_UNLOAD_S="${DEMO_IDLE_UNLOAD_S:-180}" \
+    --env DEMO_KEEP_LOADED_IDLE_S="${DEMO_KEEP_LOADED_IDLE_S:-3600}" \
     --env PYTHONPATH=/opt/dots-mocr/src:/opt/dots-mocr \
     ${DEMO_VLLM_URL:+--env DEMO_VLLM_URL="${DEMO_VLLM_URL}"} \
     ${DEMO_ATTN_IMPLEMENTATION:+--env DEMO_ATTN_IMPLEMENTATION="${DEMO_ATTN_IMPLEMENTATION}"} \
@@ -79,6 +91,7 @@ docker run -d \
     ${mount_repo:+$([[ "$mount_repo" == "1" ]] && echo "--mount type=bind,src=${repo_root},dst=/opt/dots-mocr,readonly")} \
     --mount "type=bind,src=${ckpt_dir},dst=/models,readonly" \
     --mount "type=bind,src=${state_dir},dst=/state" \
+    "${artifact_mounts[@]}" \
     "${image_name}" \
     python3 -m demo.server
 

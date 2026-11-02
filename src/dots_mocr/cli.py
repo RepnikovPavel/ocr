@@ -14,7 +14,7 @@ from qwen_vl_utils import process_vision_info
 
 from dots_mocr.transformers_patch import register_transformers
 
-from dots_mocr.utils.consts import image_extensions, MIN_PIXELS, MAX_PIXELS
+from dots_mocr.utils.consts import image_extensions, MIN_PIXELS, MAX_PIXELS, DEFAULT_ATTN_IMPLEMENTATION
 from dots_mocr.utils.generation_stats import GenerationStats
 from dots_mocr.utils.image_utils import get_image_by_fitz_doc, fetch_image, smart_resize
 from dots_mocr.utils.doc_utils import fitz_doc_to_image, load_pdf_pages
@@ -39,7 +39,7 @@ class DotsMOCRParser:
             output_dir="./output", 
             min_pixels=None,
             max_pixels=None,
-            attn_implementation="flex_attention",
+            attn_implementation=DEFAULT_ATTN_IMPLEMENTATION,
             llm_attn_implementation="sdpa",
             device="auto",
             dtype="auto",

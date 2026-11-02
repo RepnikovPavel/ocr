@@ -78,7 +78,7 @@ if have docker; then
 fi
 
 # ---- 2. demo /healthz -------------------------------------------------------
-hz=$(curl -sS -m 5 -o /dev/null -w '%{http_code}' "http://${DEMO_HOST}:${DEMO_PORT}/healthz" 2>/dev/null || echo 000)
+hz=$(curl -sS -m 5 -o /dev/null -w '%{http_code}' "http://${DEMO_HOST}:${DEMO_PORT}/healthz" 2>/dev/null || true)
 case "$hz" in
     200) ok "/healthz → 200" ;;
     503) fail "/healthz → 503 (worker thread is dead). Fast fix:"
@@ -111,6 +111,15 @@ if [ "$hz" = "200" ] && have python3; then
 fi
 
 # ---- 3. vLLM serving the right model ----------------------------------------
+engine="${DEMO_ENGINE:-}"
+if [ -z "$engine" ] && have docker; then
+    engine=$(docker inspect dots_mocr_demo --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | sed -n 's/^DEMO_ENGINE=//p')
+fi
+if [ "$engine" = "transformers" ]; then
+    ok "transformers engine uses an on-demand inference process (no vLLM service required)"
+elif [ "${ms:-}" = "stopped" ] && [ "$hz" = 200 ]; then
+    ok "model is unloaded; vLLM may be stopped to release resources"
+else
 vm=$(curl -sS -m 5 "http://127.0.0.1:${VLLM_PORT}/v1/models" 2>/dev/null || echo "")
 if have python3 && [ -n "$vm" ] && printf '%s' "$vm" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("data") else 1)' 2>/dev/null; then
     if printf '%s' "$vm" | grep -q "$VLLM_MODEL"; then
@@ -126,6 +135,8 @@ else
     else
         note "    start vLLM: scripts/run_local_vllm.sh (brings up both)"
     fi
+fi
+
 fi
 
 # ---- 4. queue length + store stats ------------------------------------------

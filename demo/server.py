@@ -17,7 +17,7 @@ Environment:
                   attention backend: flex_attention (default) | sdpa | eager |
                   flash_attention_2
   DEMO_ENGINE     vllm (default; drives a vLLM server that owns the GPU) |
-                  transformers (runs the model in this process)
+                  transformers (runs the model in a disposable child process)
   DEMO_VLLM_URL   vLLM endpoint (default http://127.0.0.1:8000/v1)
   DEMO_VLLM_MODEL served model name (default rednote-hilab/dots.mocr)
   DEMO_HOST       interface to bind (default 0.0.0.0; the deploy script sets

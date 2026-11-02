@@ -10,7 +10,7 @@ and [docs/architecture.md](docs/architecture.md) has the deep model math.
 - The dots.mocr **web demo + agent API**: a FastAPI service (port 8601) that
   takes PDFs/images and returns parsed markdown + layout JSON. Two engines:
   `vllm` (default, ~1.85× faster, separate container `dots_vllm`) and
-  `transformers` (in-process, no extra server).
+  `transformers` (disposable inference process, no extra server).
 - The companion CLI [`ocrc`](https://github.com/RepnikovPavel/ocrc) lives in a
   separate repo — install it from there, do not duplicate its logic here.
 - Use **dots.mocr** (the main model). Do not invest in `dots.mocr-svg` —
@@ -89,7 +89,7 @@ developing locally:
 # 1) local, vLLM engine (default, needs a checkpoint + GPU)
 CKPTDIR=/path/to/dots.mocr scripts/run_local_vllm.sh
 
-# 2) local, in-process transformers engine (no separate vLLM container)
+# 2) local, transformers engine (no separate vLLM container)
 CKPTDIR=/path/to/dots.mocr scripts/run_local.sh
 
 # 3) server deploy (docker compose: dots_mocr_demo + dots_vllm) — what bootstrap.sh runs
@@ -134,6 +134,7 @@ waste time on a broken env.
 | File | What |
 | --- | --- |
 | `demo/server.py` | FastAPI app, env config, `WORKER` singleton, `/healthz`, the `/api/*` browser routes |
+| `demo/inference_process.py` | disposable transformers process; exits on idle to release RAM, CPU pools and CUDA; parent only exchanges page paths and telemetry |
 | `demo/worker.py` | `DemoWorker(Thread)`: owns the model, lazy load/unload, picks tasks from the queue, manages the vLLM container via docker.sock |
 | `demo/db.py` | SQLite (sessions/jobs/tasks), WAL, short-lived connections |
 | `demo/agent_api.py` | `/api/v1` router for agents: `documents`, `documents/{sha}/bundle`, `queue`, `events` (SSE), `search`, `stats` |

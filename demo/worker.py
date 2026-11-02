@@ -61,26 +61,10 @@ def default_temperature(prompt_mode):
     return PROMPT_TO_TEMPERATURE.get(prompt_mode, DEFAULT_TEMPERATURE)
 
 
-_default_attn = None
-
-
 def default_attn_implementation():
-    """The parser's own default backend, read from its signature.
+    from dots_mocr.utils.consts import DEFAULT_ATTN_IMPLEMENTATION
 
-    Resolved lazily and cached: importing dots_mocr pulls in torch, which this
-    module deliberately avoids at import time. Reading the signature rather than
-    hard-coding the string keeps the demo from carrying a second copy of the
-    default that could silently drift from the parser's.
-    """
-    global _default_attn
-    if _default_attn is None:
-        import inspect
-
-        from dots_mocr.cli import DotsMOCRParser
-
-        parameter = inspect.signature(DotsMOCRParser).parameters["attn_implementation"]
-        _default_attn = parameter.default
-    return _default_attn
+    return DEFAULT_ATTN_IMPLEMENTATION
 
 
 class DemoWorker(threading.Thread):
@@ -99,7 +83,7 @@ class DemoWorker(threading.Thread):
         # None => whatever DotsMOCRParser defaults to, so the demo never carries
         # a second copy of that default that could drift from the parser's.
         self.attn_implementation = attn_implementation
-        # "transformers" runs the model in this process; "vllm" drives a server
+        # "transformers" owns a disposable child; "vllm" drives a server
         # that owns the GPU instead. Everything downstream — artifacts, the queue,
         # the tokens/s readout — is identical, so the two are directly comparable.
         self.engine = engine
@@ -118,11 +102,8 @@ class DemoWorker(threading.Thread):
         self.model_state = "stopped"       # stopped | loading | loaded | error
         self.model_error = None
         self.paused = False                # paused => no auto-load on demand
-        # Idle-unloading hands the GPU back when no agent is asking for anything.
-        # It applies to both engines: the in-process one drops its weights, and
-        # the vLLM one is put to sleep, which returns the server's memory too
-        # (measured 9.6 -> 2.3 GiB). The next queued task wakes it automatically,
-        # so an idle service costs no VRAM and a busy one is unaffected.
+        # The transformers child exits on idle, releasing CPU/RAM and CUDA.
+        # Managed vLLM containers are stopped for the same reason.
         self.keep_loaded = keep_loaded
         self.idle_unload_seconds = idle_unload_seconds
         # keep_loaded is a bounded pin, not "never unload": it stretches the
@@ -132,9 +113,8 @@ class DemoWorker(threading.Thread):
         # is eventually handed back. 0 restores the old "never unload".
         self.keep_loaded_idle_seconds = keep_loaded_idle_seconds
         self.current_task_id = None
-        # GenerationStats of the page being decoded right now. The parser mutates
-        # it in place, so /api/state reads live tokens/s straight off this object
-        # without any per-token bookkeeping of our own.
+        # The inference child streams lightweight GenerationStats snapshots.
+        # In-process parser factories may still mutate this object in place.
         self.live_stats = None
         self.live_page = None
         self.abort_event = threading.Event()
@@ -228,6 +208,7 @@ class DemoWorker(threading.Thread):
             "unload_in_seconds": unload_in,
             "current_task_id": self.current_task_id,
             "device": getattr(self.parser, "device", None) if self.parser else None,
+            "inference_pid": getattr(self.parser, "pid", None),
             "configured_device": self.device,  # user-selected target (even when unloaded)
             "engine": self.engine,
             # once loaded the parser knows the EFFECTIVE backend (it may have
@@ -278,9 +259,9 @@ class DemoWorker(threading.Thread):
                 device="vllm", dtype="auto", **common,
             )
 
-        from dots_mocr.cli import DotsMOCRParser
+        from demo.inference_process import InferenceProcess
 
-        return DotsMOCRParser(
+        return InferenceProcess(
             device=self.device,
             dtype="bfloat16" if self.device != "cpu" else "float32",
             **({"attn_implementation": self.attn_implementation}
@@ -453,25 +434,25 @@ class DemoWorker(threading.Thread):
             return
 
         parser = self.parser
+        if parser is not None:
+            close = getattr(parser, "close", None)
+            if close is not None:
+                close()
+            elif hasattr(parser, "model"):
+                del parser.model
         self.parser = None
         if self.model_state != "error":
             self.model_state = "stopped"
-        if parser is not None:
-            try:
-                del parser.model
-            except AttributeError:
-                pass
-            del parser
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except ImportError:
-                pass
 
     # ------------------------------------------------------------ main loop
 
     def run(self):
+        try:
+            self._run_until_shutdown()
+        finally:
+            self._unload_model()
+
+    def _run_until_shutdown(self):
         # Self-healing outer loop. The inner `while` does the real work; any
         # Exception that escapes it (most painfully sqlite3.OperationalError
         # from db.has_queued_tasks() / db.claim_next_task() when the state
@@ -629,12 +610,8 @@ class DemoWorker(threading.Thread):
                 task["id"], status="error",
                 error=f"{type(error).__name__}: {error}", finished_at=time.time(),
             )
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()  # release fragments after OOM
-            except ImportError:
-                pass
+            if hasattr(self.parser, "close"):
+                self._unload_model()
         finally:
             self.current_task_id = None
             self.live_stats = None
@@ -669,8 +646,7 @@ class DemoWorker(threading.Thread):
         return matches[0]
 
     def _execute(self, task):
-        from dots_mocr.utils.doc_utils import load_pdf_pages
-        from dots_mocr.utils.image_utils import fetch_image
+        from demo.page_parser import parse_page
 
         job = db.get_job(task["job_id"])
         if job is None:
@@ -716,27 +692,19 @@ class DemoWorker(threading.Thread):
 
             started = time.time()
             self.live_page = page_no
-            if job["kind"] == "pdf":
-                rendered = load_pdf_pages(str(pdf_input), dpi=dpi, page_ids=[page_no])
-                if not rendered:
-                    raise ValueError(f"page {page_no} did not render")
-                origin_image = rendered[0][1]
-                page_bbox = self._scale_bbox(bbox, params.get("bbox_view_size"), origin_image)
-                page_result = self.parser._parse_single_image(
-                    origin_image, prompt_mode, str(out_dir), save_name,
-                    source="pdf", page_idx=page_no, bbox=page_bbox,
-                    custom_prompt=custom_prompt, temperature=temperature,
-                )
-            else:
-                origin_image = fetch_image(str(self._input_path(job, page_no)))
-                fitz_preprocess = PROMPT_TO_FITZ_PREPROCESS.get(prompt_mode, False)
-                page_bbox = self._scale_bbox(bbox, params.get("bbox_view_size"), origin_image)
-                page_result = self.parser._parse_single_image(
-                    origin_image, prompt_mode, str(out_dir), f"{save_name}_page_{page_no}",
-                    source="image", page_idx=page_no, bbox=page_bbox,
-                    fitz_preprocess=fitz_preprocess,
-                    custom_prompt=custom_prompt, temperature=temperature,
-                )
+            page_kwargs = dict(
+                input_path=str(pdf_input or self._input_path(job, page_no)),
+                kind=job["kind"], page_no=page_no, dpi=dpi,
+                bbox_view_size=params.get("bbox_view_size"), bbox=bbox,
+                prompt_mode=prompt_mode, save_dir=str(out_dir),
+                save_name=save_name if job["kind"] == "pdf" else f"{save_name}_page_{page_no}",
+                custom_prompt=custom_prompt, temperature=temperature,
+            )
+            if job["kind"] != "pdf":
+                page_kwargs["fitz_preprocess"] = PROMPT_TO_FITZ_PREPROCESS.get(prompt_mode, False)
+            remote_parse = getattr(self.parser, "parse_page", None)
+            page_result = (remote_parse(**page_kwargs) if remote_parse is not None
+                           else parse_page(self.parser, **page_kwargs))
 
             aborted = self.abort_event.is_set() or db.is_cancel_requested(task["id"])
             if aborted:
