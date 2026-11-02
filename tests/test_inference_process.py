@@ -141,6 +141,28 @@ def test_dead_child_does_not_hang(process_env, tmp_path):
         parser.close()
 
 
+@pytest.mark.skipif(not hasattr(os, "posix_fadvise"), reason="requires POSIX file-cache hints")
+def test_unload_releases_only_its_checkpoint_cache_after_child_exit(process_env, tmp_path, monkeypatch):
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    (checkpoint / "model-00001.safetensors").write_bytes(b"model weights")
+    (checkpoint / "config.json").write_text("{}")
+    (tmp_path / "unrelated.safetensors").write_bytes(b"another service")
+    parser = make_parser(ckpt=str(checkpoint))
+    child = parser.process
+    dropped = []
+
+    def advise(fd, offset, length, advice):
+        assert child.poll() is not None
+        assert advice == os.POSIX_FADV_DONTNEED
+        dropped.append(os.read(fd, 100))
+
+    monkeypatch.setattr(os, "posix_fadvise", advise)
+    parser.close()
+    assert dropped == [b"model weights"]
+    assert (checkpoint / "model-00001.safetensors").read_bytes() == b"model weights"
+
+
 def test_status_and_lightweight_utilities_do_not_import_torch(process_env):
     subprocess.run([sys.executable, "-c", """
 import sys

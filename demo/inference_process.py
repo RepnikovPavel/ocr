@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 import traceback
+from pathlib import Path
 
 
 class InferenceProcess:
@@ -22,6 +23,11 @@ class InferenceProcess:
         self.abort_event = None
         self.generation_listener = None
         self.max_completion_tokens = kwargs.get("max_completion_tokens", 16384)
+        checkpoint = kwargs.get("ckpt")
+        self._checkpoint_files = (
+            tuple(path for pattern in ("*.safetensors", "pytorch_model*.bin")
+                  for path in Path(checkpoint).glob(pattern)) if checkpoint else ()
+        )
         self.process = None
         self.connection, child = multiprocessing.Pipe(duplex=True)
         try:
@@ -93,6 +99,13 @@ class InferenceProcess:
                 process.wait(timeout=5)
             self.process = None
         self.connection.close()
+        if hasattr(os, "posix_fadvise"):
+            for path in self._checkpoint_files:
+                try:
+                    with path.open("rb") as weights:
+                        os.posix_fadvise(weights.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+                except OSError as error:
+                    print(f"[inference] cannot release checkpoint cache: {error}", flush=True)
 
 
 def serve(connection):
