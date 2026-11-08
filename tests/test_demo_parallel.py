@@ -83,7 +83,7 @@ def test_cancel_drains_both_workers_and_keeps_finished_pages(env, monkeypatch):
         task_id = db.create_task(env["sid"], env["job_id"], "prompt_ocr", [0, 1, 2], {})
         worker.notify_new_task()
         assert first.entered.wait(5) and second.entered.wait(5)
-        assert db.get_task(task_id)["progress"]["done"] == 1
+        assert wait_for(lambda: db.get_task(task_id)["progress"]["done"] == 1)
         worker.cancel_task(task_id)
         assert wait_for(lambda: db.get_task(task_id)["status"] == "cancelled")
         assert first.exited.is_set() and second.exited.is_set()
