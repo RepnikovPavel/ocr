@@ -77,6 +77,11 @@ bash scripts/bootstrap.sh --dry-run       # detect + preflight only, deploy noth
 bash scripts/bootstrap.sh --down          # stop
 ```
 
+On a two-GPU host bootstrap starts two independent vLLM processes, one per
+card. Pages are dispatched to the next free process and assembled in document
+order. `VLLM_GPUS=0,1` selects both explicitly; `VLLM_GPU=0` keeps a single
+process. `VLLM_PORT_2` defaults to `VLLM_PORT + 1`.
+
 `bootstrap.sh` hands off to `deploy_server.sh` — it does not duplicate the deploy
 logic. Read `scripts/bootstrap.sh` to see exactly what it auto-detects
 (checkpoint paths, driver → image map) and how to override with `FORCE_*` /
@@ -158,6 +163,9 @@ waste time on a broken env.
 | `DEMO_ENGINE` | `vllm` | `vllm` or `transformers` |
 | `DEMO_VLLM_URL` | `http://127.0.0.1:8000/v1` | vLLM OpenAI endpoint |
 | `DEMO_VLLM_CONTAINER` | `dots_vllm` | container the worker stops/starts on idle-unload (needs docker.sock) |
+| `DEMO_VLLM_URLS` | unset | comma-separated independent GPU endpoints; overrides the single URL |
+| `DEMO_VLLM_CONTAINERS` | unset | matching container names; start/stop both on model load/unload |
+| `DEMO_VLLM_STARTUP_TIMEOUT_S` | `600` | readiness deadline per process, including CUDA graph compilation |
 | `DEMO_IDLE_UNLOAD_S` | `180` | seconds idle before the model is unloaded |
 | `DEMO_VARIANT` | `mocr` | `mocr` (default) or `svg` (do not develop) |
 | `DEMO_PORT` / `PORT` | `8601` | demo HTTP port |
@@ -205,6 +213,10 @@ images/markdown bundles live in `$DEMO_STATE_DIR/jobs/<task_id>/`.
     (`ocrc` prints it since PR #17). A page is never rejected for embedding a
     huge figure anymore — it renders at the page matrix; regression test:
     `tests/test_pdf_render_robustness.py` (arXiv 2407.21783/2501.12948 incident).
+12. **A running vLLM container is not necessarily ready.** Cold starts compile
+    CUDA graphs and can exceed 120 s. Wait for `/health` on every process, even
+    if Docker already says Running. Startup failures fail queued tasks with
+    the model error; resubmitting an active task resumes a paused worker.
 
 ## Making changes
 

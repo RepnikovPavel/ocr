@@ -19,6 +19,9 @@ Environment:
   DEMO_ENGINE     vllm (default; drives a vLLM server that owns the GPU) |
                   transformers (runs the model in this process)
   DEMO_VLLM_URL   vLLM endpoint (default http://127.0.0.1:8000/v1)
+  DEMO_VLLM_URLS  comma-separated independent endpoints for page parallelism
+  DEMO_VLLM_CONTAINERS matching container names (start/stop all with the model)
+  DEMO_VLLM_STARTUP_TIMEOUT_S readiness deadline per process (default 600)
   DEMO_VLLM_MODEL served model name (default rednote-hilab/dots.mocr)
   DEMO_HOST       interface to bind (default 0.0.0.0; the deploy script sets
                   127.0.0.1 under host networking, where nothing else restricts it)
@@ -54,6 +57,7 @@ if str(ROOT / "src") not in sys.path:
 from demo import agent_api, arxiv_api, db, docstore
 from demo.arxiv import db as arxiv_db
 from demo.worker import PAGE_SECONDS_ESTIMATE, DemoWorker, default_temperature
+from dots_mocr.utils.fitz_lock import serialized_fitz
 
 VARIANT = os.environ.get("DEMO_VARIANT", "mocr")
 CKPTDIR = os.environ.get("CKPTDIR", "/models")
@@ -153,6 +157,11 @@ def _make_worker():
         engine=os.environ.get("DEMO_ENGINE", "vllm"),
         vllm_url=os.environ.get("DEMO_VLLM_URL"),
         vllm_model=os.environ.get("DEMO_VLLM_MODEL"),
+        vllm_urls=[u.strip() for u in os.environ.get("DEMO_VLLM_URLS", "").split(",")
+                   if u.strip()] or None,
+        vllm_containers=[c.strip() or None for c in os.environ["DEMO_VLLM_CONTAINERS"].split(",")]
+                        if os.environ.get("DEMO_VLLM_CONTAINERS") else None,
+        vllm_startup_timeout=float(os.environ.get("DEMO_VLLM_STARTUP_TIMEOUT_S", "600")),
     )
 
 
@@ -416,6 +425,7 @@ def _save_image_page(job_dir, file, index, url_prefix):
             "width": width, "height": height}
 
 
+@serialized_fitz
 def _build_pdf_job(job_dir, file, url_prefix):
     dest = job_dir / "input.pdf"
     with dest.open("wb") as handle:

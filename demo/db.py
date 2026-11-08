@@ -183,6 +183,15 @@ def has_queued_tasks():
         return row is not None
 
 
+def fail_queued_tasks(error):
+    """A failed model load must give waiting clients a terminal diagnosis."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE tasks SET status='error', error=?, finished_at=? WHERE status='queued'",
+            (error, time.time()),
+        )
+
+
 def find_active_task_by_doc(sha256, prompt_mode, pages_json):
     """Return an already-running (or queued) task for this doc+mode+pages.
 

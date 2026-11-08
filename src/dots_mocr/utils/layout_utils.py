@@ -7,6 +7,7 @@ import json
 import re
 
 from dots_mocr.utils.image_utils import smart_resize
+from dots_mocr.utils.fitz_lock import serialized_fitz
 from dots_mocr.utils.consts import MIN_PIXELS, MAX_PIXELS
 from dots_mocr.utils.output_cleaner import OutputCleaner
 
@@ -29,6 +30,7 @@ dict_layout_type_to_color = {
 }
 
 
+@serialized_fitz
 def draw_layout_on_image(image, cells, resized_height=None, resized_width=None, fill_bbox=True, draw_bbox=True):
     """
     Draw transparent boxes on an image.
