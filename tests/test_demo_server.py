@@ -176,6 +176,29 @@ def test_agent_api_surfaces_task_error(mocr):
     assert "boom on page 0" in status()["error"]
 
 
+def test_agent_resubmission_resumes_existing_paused_task(mocr):
+    server, client, _ = mocr
+    # Freeze execution, so we exercise the persisted queue without a load race.
+    server.WORKER.shutdown()
+    payload = pdf_bytes(3)
+
+    def submit():
+        return client.post("/api/v1/documents", files={
+            "file": ("doc.pdf", io.BytesIO(payload), "application/pdf"),
+        }).json()
+
+    first = submit()
+    server.WORKER.request_stop()
+    assert server.WORKER.paused
+    duplicate = submit()
+    assert duplicate["status"] == "in_progress"
+    assert duplicate["task_id"] == first["task_id"]
+    assert duplicate["queue_length"] == 1
+    assert not server.WORKER.paused
+    status = client.get(f"/api/v1/documents/{first['sha256']}").json()
+    assert status["progress"] == {"done": 0, "total": 3}
+
+
 def test_task_validation(mocr):
     _, client, _ = mocr
     job = upload_pdf(client)

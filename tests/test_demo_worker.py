@@ -282,10 +282,12 @@ def test_worker_load_error_pauses_instead_of_retry_loop(env):
                         parser_factory=failing_factory, autostart=False)
     worker.start()
     try:
-        db.create_task(env["sid"], env["job_id"], "prompt_ocr", [0], {})
+        task_id = db.create_task(env["sid"], env["job_id"], "prompt_ocr", [0], {})
         worker.notify_new_task()
         assert wait_for(lambda: worker.model_state == "error")
         assert wait_for(lambda: worker.paused, timeout=2)
+        assert db.get_task(task_id)["status"] == "error"
+        assert "no checkpoint" in db.get_task(task_id)["error"]
         attempts = calls["n"]
         time.sleep(1.5)
         assert calls["n"] == attempts  # no retry hammering

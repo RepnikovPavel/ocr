@@ -3,6 +3,7 @@ import numpy as np
 import enum
 from pydantic import BaseModel, Field
 from PIL import Image
+from dots_mocr.utils.fitz_lock import serialized_fitz
 
 
 class SupportedPdfParseMethod(enum.Enum):
@@ -35,6 +36,7 @@ def get_matrix(page, dpi_default=200, max_pixels=11289600):
 MAX_RENDER_SIDE = 4500
 
 
+@serialized_fitz
 def fitz_doc_to_image(doc, target_dpi=200, origin_dpi=None) -> dict:
     """Convert fitz.Document to image, Then convert the image to numpy array.
 
@@ -61,6 +63,7 @@ def fitz_doc_to_image(doc, target_dpi=200, origin_dpi=None) -> dict:
     return image
 
 
+@serialized_fitz
 def load_pdf_pages(pdf_file, dpi=200, page_ids=None) -> list:
     pages = []
     with fitz.open(pdf_file) as doc:
@@ -82,6 +85,7 @@ def load_pdf_pages(pdf_file, dpi=200, page_ids=None) -> list:
     return pages
 
 
+@serialized_fitz
 def load_images_from_pdf(pdf_file, dpi=200, start_page_id=0, end_page_id=None) -> list:
     with fitz.open(pdf_file) as doc:
         last_page_id = doc.page_count - 1 if end_page_id is None or end_page_id < 0 else min(end_page_id, doc.page_count - 1)

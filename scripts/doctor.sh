@@ -34,6 +34,7 @@ DEMO_PORT="${DEMO_PORT:-${PORT:-8601}}"
 DEMO_HOST="${DEMO_HOST:-127.0.0.1}"
 VLLM_PORT="${VLLM_PORT:-8000}"
 VLLM_MODEL="${VLLM_MODEL:-rednote-hilab/dots.mocr}"
+VLLM_URLS="${DEMO_VLLM_URLS:-}"
 STATE_DIR="${STATE_DIR:-${DEMO_STATE_DIR:-}}"
 
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -54,10 +55,16 @@ if [ -z "${VLLM_PORT_EXPLICIT:-}" ] && have docker; then
          | sed -nE 's#http://[^:/]*:([0-9]+)/?.*#\1#p' | head -1)
     [ -n "$vp" ] && VLLM_PORT="$vp"
 fi
+if [ -z "$VLLM_URLS" ] && have docker; then
+    VLLM_URLS=$(docker inspect dots_mocr_demo \
+        --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+        | awk -F= '$1=="DEMO_VLLM_URLS"{print $2}')
+fi
+[ -n "$VLLM_URLS" ] || VLLM_URLS="http://127.0.0.1:${VLLM_PORT}/v1"
 [ -z "$STATE_DIR" ] && STATE_DIR="./server_state"
 
 echo "=== dots.mocr doctor ==="
-note "demo=${DEMO_HOST}:${DEMO_PORT} vllm=:${VLLM_PORT} state=${STATE_DIR}"
+note "demo=${DEMO_HOST}:${DEMO_PORT} vllm=${VLLM_URLS} state=${STATE_DIR}"
 echo
 
 # ---- 1. demo container (only if docker is usable) ---------------------------
@@ -107,25 +114,7 @@ if [ "$hz" = "200" ] && have python3; then
     elif [ -n "$wa" ]; then
         ok "worker_alive=true  model_state=$ms  paused=$paused"
     fi
-    [ -n "$err" ] && [ "$err" != "None" ] && [ "$err" != "null" ] && warn "model_error: $err"
-fi
-
-# ---- 3. vLLM serving the right model ----------------------------------------
-vm=$(curl -sS -m 5 "http://127.0.0.1:${VLLM_PORT}/v1/models" 2>/dev/null || echo "")
-if have python3 && [ -n "$vm" ] && printf '%s' "$vm" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("data") else 1)' 2>/dev/null; then
-    if printf '%s' "$vm" | grep -q "$VLLM_MODEL"; then
-        ok "vLLM on :${VLLM_PORT} serving $VLLM_MODEL"
-    else
-        fail "vLLM is up but $VLLM_MODEL not in /v1/models; got:"
-        note "    $(printf '%s' "$vm" | head -c 200)"
-    fi
-else
-    fail "vLLM unreachable on 127.0.0.1:${VLLM_PORT}."
-    if have docker; then
-        note "    docker ps | grep dots_vllm  — if Exited: docker start dots_vllm"
-    else
-        note "    start vLLM: scripts/run_local_vllm.sh (brings up both)"
-    fi
+    [ -n "$err" ] && [ "$err" != "None" ] && [ "$err" != "null" ] && fail "model_error: $err"
 fi
 
 # ---- 4. queue length + store stats ------------------------------------------
@@ -138,6 +127,27 @@ if have python3; then
         *)        note "queue: $q" ;;
     esac
 fi
+
+# ---- 3. each independent vLLM process serving the right model ---------------
+IFS=, read -ra vllm_targets <<< "$VLLM_URLS"
+for target in "${vllm_targets[@]}"; do
+    target="${target%/}"
+    vm=$(curl -sS -m 5 "${target}/models" 2>/dev/null || true)
+    if have python3 && [ -n "$vm" ] && printf '%s' "$vm" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("data") else 1)' 2>/dev/null; then
+        if printf '%s' "$vm" | grep -q "$VLLM_MODEL"; then
+            ok "vLLM at $target serving $VLLM_MODEL"
+        else
+            fail "vLLM at $target is up but $VLLM_MODEL not in /models"
+            note "    $(printf '%s' "$vm" | head -c 200)"
+        fi
+    elif [ "${ms:-}" = stopped ] && [ "${qlen:-?}" = 0 ]; then
+        ok "vLLM at $target stopped while idle (loads on demand)"
+    else
+        fail "vLLM unreachable at $target"
+        note "    docker logs dots_vllm; docker logs dots_vllm_2"
+        note "    POST /api/model/start retries loading; model errors also fail queued tasks"
+    fi
+done
 
 # ---- 5. state dir / sqlite permissions --------------------------------------
 if [ -n "$STATE_DIR" ]; then

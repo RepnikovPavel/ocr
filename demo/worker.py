@@ -19,6 +19,7 @@ import os
 import threading
 import time
 import traceback
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
 from demo import db
@@ -91,7 +92,8 @@ class DemoWorker(threading.Thread):
                  parser_factory=None, autostart=False, keep_loaded=False,
                  idle_unload_seconds=180, keep_loaded_idle_seconds=3600,
                  attn_implementation=None,
-                 engine="transformers", vllm_url=None, vllm_model=None):
+                 engine="transformers", vllm_url=None, vllm_model=None,
+                 vllm_urls=None, vllm_containers=None, vllm_startup_timeout=600):
         super().__init__(daemon=True, name="demo-worker")
         self.ckpt = ckpt
         self.jobs_dir = Path(jobs_dir)
@@ -104,6 +106,22 @@ class DemoWorker(threading.Thread):
         # the tokens/s readout — is identical, so the two are directly comparable.
         self.engine = engine
         self.vllm_url = vllm_url or "http://127.0.0.1:8000/v1"
+        self.vllm_urls = [u.rstrip("/") for u in (vllm_urls or [self.vllm_url])]
+        self.vllm_url = self.vllm_urls[0]
+        if len(set(self.vllm_urls)) != len(self.vllm_urls):
+            raise ValueError("DEMO_VLLM_URLS must contain distinct endpoints")
+        if engine != "vllm" and len(self.vllm_urls) > 1:
+            raise ValueError("multiple endpoints require DEMO_ENGINE=vllm")
+        self.vllm_containers = list(vllm_containers or
+                                    [self._VLLM_CONTAINER] + [None] * (len(self.vllm_urls) - 1))
+        if len(self.vllm_containers) != len(self.vllm_urls):
+            raise ValueError("DEMO_VLLM_CONTAINERS must match DEMO_VLLM_URLS")
+        names = [c for c in self.vllm_containers if c]
+        if len(names) != len(set(names)):
+            raise ValueError("vLLM containers must be distinct")
+        self.vllm_startup_timeout = float(vllm_startup_timeout)
+        if self.vllm_startup_timeout <= 0:
+            raise ValueError("vLLM startup timeout must be positive")
         self.vllm_model = vllm_model or "rednote-hilab/dots.mocr"
         self.dpi = dpi
         # Was chosen because the dense sdpa mask OOMed above ~2.2M px/page on 24GB
@@ -115,6 +133,9 @@ class DemoWorker(threading.Thread):
         self.max_completion_tokens = max_completion_tokens
         self._parser_factory = parser_factory or self._default_parser_factory
         self.parser = None
+        self.parsers = []  # one client per independent GPU process, never shared concurrently
+        self._live_slots = {}
+        self._live_lock = threading.Lock()
         self.model_state = "stopped"       # stopped | loading | loaded | error
         self.model_error = None
         self.paused = False                # paused => no auto-load on demand
@@ -237,6 +258,9 @@ class DemoWorker(threading.Thread):
                 else (getattr(self.parser, "attn_implementation", None) if self.parser
                       else (self.attn_implementation or self._default_attn()))),
             "live": self.live_generation(),
+            "live_generations": self.live_generations(),
+            "page_workers": len(self.vllm_urls) if self.engine == "vllm" else 1,
+            "vllm_urls": self.vllm_urls if self.engine == "vllm" else [],
         }
 
     @staticmethod
@@ -249,6 +273,9 @@ class DemoWorker(threading.Thread):
 
     def live_generation(self):
         """Snapshot of the in-flight generation for the UI's tokens/s readout."""
+        parallel = self.live_generations()
+        if parallel:
+            return parallel[0]
         stats = self.live_stats
         if stats is None or stats.started_at is None:
             return None
@@ -259,9 +286,20 @@ class DemoWorker(threading.Thread):
             **stats.to_dict(),
         }
 
+    def live_generations(self):
+        with self._live_lock:
+            slots = list(self._live_slots.items())
+        return [
+            {"task_id": self.current_task_id, "worker": slot, "page_no": page,
+             "backend_url": self.vllm_urls[slot] if self.engine == "vllm" else None,
+             "done": stats.finished_at is not None, **stats.to_dict()}
+            for slot, (page, stats) in sorted(slots)
+            if stats is not None and stats.started_at is not None
+        ]
+
     # ------------------------------------------------------------ model
 
-    def _default_parser_factory(self):
+    def _default_parser_factory(self, vllm_url=None):
         common = dict(
             ckpt=self.ckpt,
             temperature=DEFAULT_TEMPERATURE,
@@ -274,7 +312,7 @@ class DemoWorker(threading.Thread):
             from dots_mocr.model.vllm_parser import VllmDotsMOCRParser
 
             return VllmDotsMOCRParser(
-                vllm_url=self.vllm_url, vllm_model=self.vllm_model,
+                vllm_url=vllm_url or self.vllm_url, vllm_model=self.vllm_model,
                 device="vllm", dtype="auto", **common,
             )
 
@@ -294,35 +332,41 @@ class DemoWorker(threading.Thread):
     def _load_model(self):
         self.model_state = "loading"
         self.model_error = None
-        # If we stopped the vLLM container on the previous idle-unload (the only
-        # way to free ALL VRAM, not just the weights), start it back and wait
-        # for /health before trying to use the parser.
-        self._start_vllm_container()
-        # A parser that is merely asleep only needs waking; rebuilding the client
-        # would leave the weights offloaded and the card still empty.
-        wake = getattr(self.parser, "wake", None) if self.parser is not None else None
-        if wake is not None:
-            try:
-                wake()
-                self.model_state = "loaded"
-                self._last_used = time.time()
-            except Exception as error:  # surfaced in the UI
-                self.model_state = "error"
-                self.model_error = f"{type(error).__name__}: {error}"
-                self.paused = True
-                traceback.print_exc()
-            return
+        self.abort_event.clear()
         try:
-            self.parser = self._parser_factory()
-            self.parser.abort_event = self.abort_event
-            self.parser.generation_listener = self._on_generation_start
+            # A running container can still be loading weights / compiling CUDA
+            # graphs. Wait for readiness on EVERY load, including after reboot.
+            self._start_vllm_container()
+            if (len(self.parsers) == len(self.vllm_urls)
+                    and all(callable(getattr(p, "wake", None)) for p in self.parsers)):
+                with ThreadPoolExecutor(max_workers=len(self.parsers)) as pool:
+                    list(pool.map(lambda p: p.wake(), self.parsers))
+            else:
+                factories = [self._parser_factory]
+                if self.engine == "vllm":
+                    factories += [lambda url=url: self._default_parser_factory(url)
+                                  for url in self.vllm_urls[1:]]
+                # Keep references to successfully constructed clients if another
+                # endpoint fails, so unloading can still release their weights.
+                self.parsers = []
+                for factory in factories:
+                    parser = factory()
+                    parser.abort_event = self.abort_event
+                    parser.generation_listener = self._on_generation_start
+                    self.parsers.append(parser)
+            self.parser = self.parsers[0]
             self.model_state = "loaded"
             self._last_used = time.time()
+        except InterruptedError:
+            self.model_state = "stopped"
         except Exception as error:  # surfaced in the UI
             self.model_state = "error"
             self.model_error = f"{type(error).__name__}: {error}"
             # do not retry in a loop: wait for an explicit start or a new task
             self.paused = True
+            # A model error used to leave every task queued forever (ocrc polls
+            # task status, not model status). Give all waiting callers the reason.
+            db.fail_queued_tasks(self.model_error)
             traceback.print_exc()
 
     # ------------------------------------------------------------ vllm container
@@ -341,8 +385,6 @@ class DemoWorker(threading.Thread):
         Docker), every call no-ops and returns (0, None).
         """
         import socket as _socket
-        if not cls._VLLM_CONTAINER:
-            return 0, None
         sock_path = cls._DOCKER_SOCKET
         if not os.path.exists(sock_path):
             return 0, None
@@ -376,10 +418,10 @@ class DemoWorker(threading.Thread):
             print(f"[worker] docker API {method} {path} failed: {error}", flush=True)
             return 0, None
 
-    def _vllm_container_running(self):
+    def _vllm_container_running(self, container=None):
         """True/False from the Docker API, None when unknown (no socket etc.)."""
         status, body = self._docker_api(
-            "GET", f"/containers/{self._VLLM_CONTAINER}/json")
+            "GET", f"/containers/{container or self._VLLM_CONTAINER}/json")
         if status != 200:
             return None
         import json as _json
@@ -394,13 +436,16 @@ class DemoWorker(threading.Thread):
         Quiet no-op when the container is already stopped — the idle reaper
         calls this on every worker-loop pass once the idle clock has run out.
         """
-        if not self._VLLM_CONTAINER:
+        for container in self.vllm_containers:
+            if container:
+                self._stop_one_vllm_container(container)
+
+    def _stop_one_vllm_container(self, container):
+        if self._vllm_container_running(container) is False:
             return
-        if self._vllm_container_running() is False:
-            return
-        status, _ = self._docker_api("POST", f"/containers/{self._VLLM_CONTAINER}/stop?t=5")
+        status, _ = self._docker_api("POST", f"/containers/{container}/stop?t=5")
         if status in (204, 304):
-            print(f"[worker] stopped vLLM container '{self._VLLM_CONTAINER}' — "
+            print(f"[worker] stopped vLLM container '{container}' — "
                   f"VRAM fully freed", flush=True)
         elif status == 0:
             pass  # no Docker socket — silent no-op
@@ -408,43 +453,61 @@ class DemoWorker(threading.Thread):
             print(f"[worker] stop vLLM container returned {status}", flush=True)
 
     def _start_vllm_container(self):
-        """Start the vLLM Docker container and block until /health is 200."""
-        if not self._VLLM_CONTAINER:
+        """Start independent GPU processes together and wait for all of them."""
+        if self.engine != "vllm":
             return
-        # Check if already running
-        if self._vllm_container_running():
-            return  # already up, nothing to do
-        # Start it
-        print(f"[worker] starting vLLM container '{self._VLLM_CONTAINER}'...",
-              flush=True)
-        self._docker_api("POST", f"/containers/{self._VLLM_CONTAINER}/start")
-        # Wait for /health to respond (vLLM takes 10-30s to load weights)
+        with ThreadPoolExecutor(max_workers=len(self.vllm_urls)) as pool:
+            list(pool.map(lambda target: self._start_one_vllm_container(*target),
+                          zip(self.vllm_containers, self.vllm_urls)))
+
+    def _start_one_vllm_container(self, container, url):
+        if not container:
+            return  # external server; the parser checks /v1/models
+        running = self._vllm_container_running(container)
+        if running is None:
+            return  # no Docker socket; the parser will report connectivity errors
+        if not running:
+            print(f"[worker] starting vLLM container '{container}'...", flush=True)
+            status, body = self._docker_api("POST", f"/containers/{container}/start")
+            if status not in (204, 304):
+                raise RuntimeError(f"cannot start vLLM container {container}: HTTP {status}: {body!r}")
         import urllib.request as _url
-        health_url = self.vllm_url.replace("/v1", "") + "/health"
-        for attempt in range(60):
+        base = url.removesuffix("/v1").rstrip("/")
+        health_url = base + "/health"
+        deadline = time.monotonic() + self.vllm_startup_timeout
+        last_error = "not ready"
+        while time.monotonic() < deadline:
+            if self._shutdown.is_set() or self.paused:
+                raise InterruptedError("model startup stopped")
             try:
                 with _url.urlopen(health_url, timeout=3) as r:
                     if r.status == 200:
-                        print(f"[worker] vLLM container healthy after "
-                              f"{attempt + 1} polls", flush=True)
+                        print(f"[worker] vLLM container '{container}' ready", flush=True)
                         return
-            except Exception:
-                pass
-            time.sleep(2)
-        print(f"[worker] WARNING: vLLM container did not become healthy "
-              f"after 120s", flush=True)
+                    last_error = f"HTTP {r.status}"
+            except Exception as error:
+                last_error = f"{type(error).__name__}: {error}"
+            if self._vllm_container_running(container) is False:
+                raise RuntimeError(f"vLLM container {container} exited during startup; "
+                                   f"check docker logs {container}; {last_error}")
+            self._shutdown.wait(min(2, max(0, deadline - time.monotonic())))
+        raise TimeoutError(f"vLLM container {container} not ready at {health_url} "
+                           f"after {self.vllm_startup_timeout:g}s: {last_error}")
 
     def _unload_model(self):
         # Gate on the capability, not on the engine name: a parser that can offload
         # its own weights is the thing that makes "unload" mean something here.
         # For vLLM the GPU belongs to the server, so dropping our HTTP client would
         # free nothing while the UI reported "stopped".
-        sleep = getattr(self.parser, "sleep", None)
-        if sleep is not None:
-            try:
-                sleep()
-            except Exception:
-                pass  # best-effort; container stop below is the real unload
+        parsers = self.parsers or ([self.parser] if self.parser else [])
+        if parsers and all(callable(getattr(p, "sleep", None)) for p in parsers):
+            def offload(parser):
+                try:
+                    parser.sleep()
+                except Exception:
+                    pass  # best-effort; container stop below is the real unload
+            with ThreadPoolExecutor(max_workers=len(parsers)) as pool:
+                list(pool.map(offload, parsers))
             # If we know the vLLM Docker container name, stop it outright.
             # Sleep-mode alone leaves ~700 MiB of CUDA context / runtime
             # resident; stopping the container frees ALL VRAM back to the OS.
@@ -454,6 +517,7 @@ class DemoWorker(threading.Thread):
 
         parser = self.parser
         self.parser = None
+        self.parsers = []
         if self.model_state != "error":
             self.model_state = "stopped"
         if parser is not None:
@@ -560,6 +624,13 @@ class DemoWorker(threading.Thread):
     # ------------------------------------------------------------ task
 
     def _ensure_vllm_awake(self):
+        parsers = self.parsers or ([self.parser] if self.parser else [])
+        if parsers:
+            with ThreadPoolExecutor(max_workers=len(parsers)) as pool:
+                list(pool.map(self._ensure_one_vllm_awake, parsers))
+
+    @staticmethod
+    def _ensure_one_vllm_awake(parser):
         """Wake vLLM if it's sleeping, blocking until the weights are resident.
 
         Cheap when vLLM is already awake (one short GET /is_sleeping → false,
@@ -573,10 +644,8 @@ class DemoWorker(threading.Thread):
         unreachable, the in-flight request will fail on its own with a much
         more informative error from httpx.
         """
-        if self.parser is None:
-            return
-        is_sleeping = getattr(self.parser, "is_sleeping", None)
-        wake = getattr(self.parser, "wake", None)
+        is_sleeping = getattr(parser, "is_sleeping", None)
+        wake = getattr(parser, "wake", None)
         if is_sleeping is None or wake is None:
             return  # in-process transformers engine — no concept of sleep
         try:
@@ -639,6 +708,8 @@ class DemoWorker(threading.Thread):
             self.current_task_id = None
             self.live_stats = None
             self.live_page = None
+            with self._live_lock:
+                self._live_slots.clear()
             self.abort_event.clear()
 
     @staticmethod
@@ -668,98 +739,155 @@ class DemoWorker(threading.Thread):
             raise FileNotFoundError(f"no input file for job {job['id']}")
         return matches[0]
 
-    def _execute(self, task):
+    def _parse_page(self, parser, slot, task, job, page_no, out_dir):
         from dots_mocr.utils.doc_utils import load_pdf_pages
         from dots_mocr.utils.image_utils import fetch_image
 
-        job = db.get_job(task["job_id"])
-        if job is None:
-            raise ValueError(f"job {task['job_id']} not found")
-        pdf_input = self._input_path(job) if job["kind"] == "pdf" else None
-        out_dir = self.jobs_dir / job["id"] / "out"
-        out_dir.mkdir(parents=True, exist_ok=True)
-
+        if self.abort_event.is_set():
+            return None
+        started = time.time()
         params = task["params"]
         prompt_mode = task["prompt_mode"]
         temperature = params.get("temperature")
         if temperature is None:
             temperature = default_temperature(prompt_mode)
-        custom_prompt = params.get("custom_prompt") or None
-        bbox = params.get("bbox")
         dpi = int(params.get("dpi") or self.dpi)
-        max_new_tokens = params.get("max_new_tokens")
-        if max_new_tokens:
-            # the parser is owned by this thread only, safe to adjust per task
-            self.parser.max_completion_tokens = int(max_new_tokens)
-        else:
-            self.parser.max_completion_tokens = self.max_completion_tokens
-        pages = task["pages"] or [0]
         save_name = f"task_{task['id']}"
+        parser.max_completion_tokens = int(params.get("max_new_tokens") or self.max_completion_tokens)
 
-        results = []
-        total = len(pages)
-        db.update_task(task["id"], progress={"done": 0, "total": total})
+        def on_generation(stats):
+            with self._live_lock:
+                self._live_slots[slot] = (page_no, stats)
 
-        for index, page_no in enumerate(pages):
-            if db.is_cancel_requested(task["id"]) or self.abort_event.is_set():
-                db.update_task(
-                    task["id"], status="cancelled", result=results,
-                    progress={"done": index, "total": total},
-                    finished_at=time.time(),
-                )
-                return
-            db.update_task(
-                task["id"],
-                progress={"done": index, "total": total, "current_page": page_no,
-                          "page_started_at": time.time()},
+        parser.generation_listener = on_generation
+        backend = self.vllm_urls[slot] if self.engine == "vllm" else self.device
+        print(f"[worker] task={task['id']} page={page_no} backend={backend} started", flush=True)
+        if job["kind"] == "pdf":
+            rendered = load_pdf_pages(str(self._input_path(job)), dpi=dpi, page_ids=[page_no])
+            if not rendered:
+                raise ValueError(f"page {page_no} did not render")
+            origin_image = rendered[0][1]
+        else:
+            origin_image = fetch_image(str(self._input_path(job, page_no)))
+        try:
+            if self.abort_event.is_set():
+                return None
+            page_bbox = self._scale_bbox(params.get("bbox"), params.get("bbox_view_size"), origin_image)
+            page_result = parser._parse_single_image(
+                origin_image, prompt_mode, str(out_dir),
+                save_name if job["kind"] == "pdf" else f"{save_name}_page_{page_no}",
+                source=job["kind"], page_idx=page_no, bbox=page_bbox,
+                fitz_preprocess=(job["kind"] == "image" and
+                                 PROMPT_TO_FITZ_PREPROCESS.get(prompt_mode, False)),
+                custom_prompt=params.get("custom_prompt") or None, temperature=temperature,
             )
-
-            started = time.time()
-            self.live_page = page_no
-            if job["kind"] == "pdf":
-                rendered = load_pdf_pages(str(pdf_input), dpi=dpi, page_ids=[page_no])
-                if not rendered:
-                    raise ValueError(f"page {page_no} did not render")
-                origin_image = rendered[0][1]
-                page_bbox = self._scale_bbox(bbox, params.get("bbox_view_size"), origin_image)
-                page_result = self.parser._parse_single_image(
-                    origin_image, prompt_mode, str(out_dir), save_name,
-                    source="pdf", page_idx=page_no, bbox=page_bbox,
-                    custom_prompt=custom_prompt, temperature=temperature,
-                )
-            else:
-                origin_image = fetch_image(str(self._input_path(job, page_no)))
-                fitz_preprocess = PROMPT_TO_FITZ_PREPROCESS.get(prompt_mode, False)
-                page_bbox = self._scale_bbox(bbox, params.get("bbox_view_size"), origin_image)
-                page_result = self.parser._parse_single_image(
-                    origin_image, prompt_mode, str(out_dir), f"{save_name}_page_{page_no}",
-                    source="image", page_idx=page_no, bbox=page_bbox,
-                    fitz_preprocess=fitz_preprocess,
-                    custom_prompt=custom_prompt, temperature=temperature,
-                )
-
-            aborted = self.abort_event.is_set() or db.is_cancel_requested(task["id"])
-            if aborted:
-                # generation was interrupted mid-page: drop the partial page
-                db.update_task(
-                    task["id"], status="cancelled", result=results,
-                    progress={"done": index, "total": total},
-                    finished_at=time.time(),
-                )
-                return
-
+            if self.abort_event.is_set() or (page_result.get("generation") or {}).get("aborted"):
+                return None
             page_result["seconds"] = round(time.time() - started, 2)
-            results.append(page_result)
-            db.update_task(
-                task["id"], result=results,
-                progress={"done": index + 1, "total": total},
-            )
+            if self.engine == "vllm":
+                page_result["backend_url"] = backend
+            print(f"[worker] task={task['id']} page={page_no} backend={backend} finished", flush=True)
+            return page_result
+        finally:
+            origin_image.close()
 
-        db.update_task(
-            task["id"], status="done", result=results,
-            progress={"done": total, "total": total}, finished_at=time.time(),
-        )
+    def _execute(self, task):
+        """Bounded page scheduler: one in-flight page per independent parser.
+
+        The next free GPU takes the next page; slow pages do not hold up the
+        other GPU. Only this coordinator writes task progress / results to DB.
+        Futures are drained before returning, including on cancellation/error,
+        so no page can keep writing artifacts after the task becomes terminal.
+        """
+        job = db.get_job(task["job_id"])
+        if job is None:
+            raise ValueError(f"job {task['job_id']} not found")
+        out_dir = self.jobs_dir / job["id"] / "out"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        pages = task["pages"] or [0]
+        total = len(pages)
+        parsers = self.parsers or [self.parser]
+        completed = {}
+        active = {}
+        next_index = 0
+        failure = None
+        cancelled = False
+
+        def ordered_results():
+            return [completed[i] for i in sorted(completed)]
+
+        def persist():
+            progress = {"done": len(completed), "total": total}
+            if active:
+                current = sorted(active.values(), key=lambda item: item[1])
+                progress.update(current_page=current[0][2], page_started_at=current[0][3])
+                if len(parsers) > 1:
+                    progress["active_pages"] = [item[2] for item in current]
+            db.update_task(task["id"], result=ordered_results(), progress=progress)
+
+        persist()
+        with ThreadPoolExecutor(max_workers=len(parsers), thread_name_prefix="ocr-page") as pool:
+            def dispatch(slot):
+                nonlocal next_index
+                if next_index >= total or self.abort_event.is_set():
+                    return
+                index = next_index
+                next_index += 1
+                page_no = pages[index]
+                with self._live_lock:
+                    self._live_slots[slot] = (page_no, None)
+                future = pool.submit(self._parse_page, parsers[slot], slot,
+                                     task, job, page_no, out_dir)
+                active[future] = (slot, index, page_no, time.time())
+
+            try:
+                if db.is_cancel_requested(task["id"]) or self.abort_event.is_set():
+                    cancelled = True
+                    self.abort_event.set()
+                else:
+                    for slot in range(min(len(parsers), total)):
+                        dispatch(slot)
+                    persist()
+                while active:
+                    if db.is_cancel_requested(task["id"]) or self.abort_event.is_set():
+                        cancelled = True
+                        self.abort_event.set()
+                    done, _ = wait(active, timeout=0.1, return_when=FIRST_COMPLETED)
+                    free_slots = []
+                    for future in done:
+                        slot, index, page_no, _ = active.pop(future)
+                        with self._live_lock:
+                            self._live_slots.pop(slot, None)
+                        try:
+                            result = future.result()
+                            if result is not None:
+                                completed[index] = result
+                            else:
+                                cancelled = True
+                                self.abort_event.set()
+                        except Exception as error:
+                            if failure is None:
+                                failure = RuntimeError(f"page {page_no}, worker {slot}: {type(error).__name__}: {error}")
+                            self.abort_event.set()
+                        free_slots.append(slot)
+                    if failure is None and not cancelled:
+                        for slot in free_slots:
+                            dispatch(slot)
+                    if done:
+                        persist()
+            except BaseException:
+                self.abort_event.set()
+                raise
+        if failure is not None:
+            raise failure
+        results = ordered_results()
+        if cancelled or self.abort_event.is_set() or db.is_cancel_requested(task["id"]):
+            db.update_task(task["id"], status="cancelled", result=results,
+                           progress={"done": len(results), "total": total}, finished_at=time.time())
+            return
         self._record_in_docstore(task, job, results)
+        db.update_task(task["id"], status="done", result=results,
+                       progress={"done": total, "total": total}, finished_at=time.time())
 
     @staticmethod
     def _record_in_docstore(task, job, results):

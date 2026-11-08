@@ -18,7 +18,7 @@
 #
 # The parse cache is NOT something this (or any deploy) sets up: it is built
 # into the demo (demo/docstore.py, SHA-256 in SQLite) and starts with the demo
-# container. There is no separate cache component and no SeaweedFS to deploy.
+# container. The arxiv pipeline's separate SeaweedFS stack is managed separately.
 set -Eeuo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -81,20 +81,33 @@ fi
 # ports the deployment uses
 DEMO_PORT="${DEMO_PORT:-8601}"
 VLLM_PORT="${VLLM_PORT:-8000}"
+VLLM_PORT_2="${VLLM_PORT_2:-$((VLLM_PORT + 1))}"
+# Use both cards when available, unless an operator explicitly pins one GPU.
+if [ -z "${VLLM_GPUS:-}" ]; then
+    VLLM_GPUS="${VLLM_GPU:-$(nvidia-smi --query-gpu=index --format=csv,noheader | sed -n '1,2p' | paste -sd,)}"
+fi
+vllm_ports=("$VLLM_PORT")
+[[ "$VLLM_GPUS" == *,* ]] && vllm_ports+=("$VLLM_PORT_2")
 port_busy() { ss -ltn "sport = :$1" 2>/dev/null | tail -n +2 | grep -q .; }
-for p in "$DEMO_PORT" "$VLLM_PORT"; do
+existing_demo_port=$(docker inspect "${DEMO_CONTAINER:-dots_mocr_demo}" \
+    --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+    | awk -F= '$1=="PORT"{print $2}' || true)
+for p in "$DEMO_PORT" "${vllm_ports[@]}"; do
     # the existing containers occupying these are fine — a re-deploy — but an
     # UNRELATED process (another service) is exactly the 404-trap deploy_server.sh
     # warns about; refuse early instead of letting it surface as a confusing error.
     if port_busy "$p"; then
         if docker ps --format '{{.Ports}}' 2>/dev/null | grep -q ":$p->"; then
             note "port $p held by a docker container (likely ours — redeploy)"
+        elif [ "$p" = "$existing_demo_port" ] && docker inspect "${DEMO_CONTAINER:-dots_mocr_demo}" \
+            --format '{{.State.Running}} {{.HostConfig.NetworkMode}}' 2>/dev/null | grep -qx 'true host'; then
+            note "port $p held by the existing host-network demo — redeploy"
         else
             die "port $p is busy with something other than our containers. Free it or set DEMO_PORT/VLLM_PORT."
         fi
     fi
 done
-ok "ports ${DEMO_PORT} (demo) and ${VLLM_PORT} (vLLM) are clear"
+ok "ports ${DEMO_PORT} (demo) and ${vllm_ports[*]} (vLLM) are clear; GPUs=$VLLM_GPUS"
 
 # ---- 2. find the checkpoint -------------------------------------------------
 step "locate the dots.mocr checkpoint"
@@ -202,7 +215,7 @@ esac
     echo "==>${G} dry run complete — would deploy with:${O}"
     note "CKPT=$CKPT"
     note "DOTS_MOCR_IMAGE=$DOTS_MOCR_IMAGE  VLLM_IMAGE=$VLLM_IMAGE"
-    note "DEMO_PORT=$DEMO_PORT  VLLM_PORT=$VLLM_PORT  bind=$BIND"
+    note "DEMO_PORT=$DEMO_PORT  VLLM ports=${vllm_ports[*]}  GPUs=$VLLM_GPUS  bind=$BIND"
     exit 0
 }
 
@@ -219,7 +232,7 @@ case "$BIND" in
     localhost)  export DOTS_MOCR_BIND=127.0.0.1 ;;
 esac
 
-export CKPT STATE DOTS_MOCR_IMAGE VLLM_IMAGE VLLM_GPU DEMO_PORT VLLM_PORT
+export CKPT STATE DOTS_MOCR_IMAGE VLLM_IMAGE VLLM_GPU VLLM_GPUS DEMO_PORT VLLM_PORT VLLM_PORT_2
 bash "$ROOT/scripts/deploy_server.sh"
 
 # ---- 6. verify --------------------------------------------------------------

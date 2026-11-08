@@ -5,6 +5,7 @@ from typing import Tuple
 import os
 from dots_mocr.utils.consts import IMAGE_FACTOR, MIN_PIXELS, MAX_PIXELS
 from dots_mocr.utils.doc_utils import fitz_doc_to_image
+from dots_mocr.utils.fitz_lock import serialized_fitz
 from io import BytesIO
 import fitz
 import requests
@@ -167,6 +168,7 @@ def get_input_dimensions(
     return input_width, input_height
 
 
+@serialized_fitz
 def get_image_by_fitz_doc(image, target_dpi=200):
     # get image through fitz, to get target dpi image, mainly for higher image
     if not isinstance(image, Image.Image):

@@ -5,7 +5,8 @@
 #   CKPT=... STATE=... DOTS_MOCR_BIND=0.0.0.0 scripts/deploy_server.sh   # LAN
 #   scripts/deploy_server.sh --down                                      # stop
 #
-# Brings up two containers with docker compose. They are separate on purpose:
+# VLLM_GPUS=0,1 starts two independent inference processes (one page per GPU).
+# Brings up the inference containers and the API with docker compose:
 # vLLM owns the GPU and takes ~40 s to be ready, the demo restarts in a second,
 # so shipping new code does not reload 6 GB of weights.
 set -Eeuo pipefail
@@ -17,14 +18,37 @@ CKPT="${CKPT:-${CKPTDIR:-${DOTS_MOCR_CKPT:-}}}"
 STATE="${STATE:-${DEMO_STATE_DIR:-$ROOT/server_state}}"
 DEMO_PORT="${DEMO_PORT:-8601}"
 VLLM_PORT="${VLLM_PORT:-8000}"
+VLLM_PORT_2="${VLLM_PORT_2:-$((VLLM_PORT + 1))}"
+VLLM_GPUS="${VLLM_GPUS:-${VLLM_GPU:-0}}"
 BIND="${DOTS_MOCR_BIND:-127.0.0.1}"
+COMPOSE_ARGS=(-f "$COMPOSE")
 
 if [[ "${1:-}" == "--down" ]]; then
     REPO_ROOT="$ROOT" CKPT_DIR="${CKPT:-/nonexistent}" STATE_DIR="$STATE" \
     VLLM_CKPT_SHADOW="$STATE/vllm_ckpt" \
-        docker compose -f "$COMPOSE" down
+        docker compose -f "$COMPOSE" --profile dual-gpu down
     echo "stopped"
     exit 0
+fi
+
+IFS=, read -ra GPU_IDS <<< "$VLLM_GPUS"
+[[ ${#GPU_IDS[@]} -ge 1 && ${#GPU_IDS[@]} -le 2 && "$VLLM_GPUS" != *, ]] || {
+    echo "VLLM_GPUS must name one or two distinct GPUs (for example 0,1)" >&2; exit 2; }
+for gpu in "${GPU_IDS[@]}"; do
+    [[ "$gpu" =~ ^[0-9]+$ || "$gpu" == GPU-* ]] || { echo "invalid GPU id: $gpu" >&2; exit 2; }
+done
+export VLLM_GPU="${GPU_IDS[0]}"
+export DEMO_VLLM_URLS="http://127.0.0.1:${VLLM_PORT}/v1"
+export DEMO_VLLM_CONTAINERS="${VLLM_CONTAINER:-dots_vllm}"
+VLLM_PORTS=("$VLLM_PORT")
+if [[ ${#GPU_IDS[@]} == 2 ]]; then
+    [[ "${GPU_IDS[0]}" != "${GPU_IDS[1]}" && "$VLLM_PORT" != "$VLLM_PORT_2" ]] || {
+        echo "the two GPUs and vLLM ports must be distinct" >&2; exit 2; }
+    export VLLM_GPU_2="${GPU_IDS[1]}" VLLM_PORT_2
+    DEMO_VLLM_URLS+=",http://127.0.0.1:${VLLM_PORT_2}/v1"
+    DEMO_VLLM_CONTAINERS+=",${VLLM_CONTAINER_2:-dots_vllm_2}"
+    VLLM_PORTS+=("$VLLM_PORT_2")
+    COMPOSE_ARGS+=(--profile dual-gpu)
 fi
 
 [[ -n "$CKPT" && -d "$CKPT" ]] || { echo "CKPT must point at the checkpoint snapshot" >&2; exit 2; }
@@ -69,16 +93,22 @@ export DEMO_HOST="$BIND"
 echo "deploying from $ROOT"
 echo "  checkpoint : $CKPT"
 echo "  state      : $STATE"
-echo "  demo       : ${BIND}:${DEMO_PORT}   vLLM: 127.0.0.1:${VLLM_PORT}"
-docker compose -f "$COMPOSE" up -d
+echo "  demo       : ${BIND}:${DEMO_PORT}"
+echo "  vLLM GPUs  : ${VLLM_GPUS}   endpoints: ${DEMO_VLLM_URLS}"
+if [[ ${#GPU_IDS[@]} == 1 ]]; then
+    # A later single-GPU deploy must release a previous second replica too.
+    docker compose -f "$COMPOSE" --profile dual-gpu stop vllm2
+fi
+docker compose "${COMPOSE_ARGS[@]}" up -d
 
 # A port that is busy with something else answers, so check that what replies is
 # actually our vLLM serving our model — this exact case cost a debugging round
 # when another service on the host answered 404 on the same port.
-echo -n "waiting for vLLM"
+for replica_port in "${VLLM_PORTS[@]}"; do
+echo -n "waiting for vLLM :${replica_port}"
 vllm_ready=0
 for _ in $(seq 1 90); do
-    if curl -sf --max-time 3 "http://127.0.0.1:${VLLM_PORT}/v1/models" 2>/dev/null \
+    if curl -sf --max-time 3 "http://127.0.0.1:${replica_port}/v1/models" 2>/dev/null \
         | grep -q "${VLLM_MODEL_NAME:-rednote-hilab/dots.mocr}"; then
         vllm_ready=1; echo " up"; break
     fi
@@ -86,13 +116,14 @@ for _ in $(seq 1 90); do
 done
 if [[ "$vllm_ready" != "1" ]]; then
     echo " FAILED"
-    echo "vLLM did not come up on 127.0.0.1:${VLLM_PORT}, or something else is on that port:" >&2
-    curl -sS --max-time 3 "http://127.0.0.1:${VLLM_PORT}/v1/models" 2>&1 | head -c 200 >&2 || true
+    echo "vLLM did not come up on 127.0.0.1:${replica_port}, or something else is on that port:" >&2
+    curl -sS --max-time 3 "http://127.0.0.1:${replica_port}/v1/models" 2>&1 | head -c 200 >&2 || true
     echo >&2
     echo "  docker compose -f $COMPOSE logs vllm    # what the engine said" >&2
     echo "  VLLM_PORT=8010 scripts/deploy_server.sh # try a free port" >&2
     exit 1
 fi
+done
 echo -n "waiting for the demo"
 for _ in $(seq 1 30); do
     if curl -sf --max-time 3 "http://127.0.0.1:${DEMO_PORT}/healthz" >/dev/null 2>&1; then

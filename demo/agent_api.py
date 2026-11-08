@@ -84,8 +84,14 @@ def submit_document(
         kind = "pdf" if suffix == ".pdf" else "image"
         if kind == "pdf":
             try:
-                with fitz.open(str(stored)) as doc:
-                    num_pages = doc.page_count
+                from dots_mocr.utils.fitz_lock import serialized_fitz
+
+                @serialized_fitz
+                def count_pages():
+                    with fitz.open(str(stored)) as doc:
+                        return doc.page_count
+
+                num_pages = count_pages()
             except Exception as error:
                 raise HTTPException(400, f"broken pdf: {error}")
         else:
@@ -121,6 +127,7 @@ def submit_document(
         pages_json = _json.dumps(page_list)
         active = db.find_active_task_by_doc(sha256, mode, pages_json)
         if active is not None:
+            CONTEXT["worker"].notify_new_task()
             queue = db.list_active_tasks(limit=100)
             position = next(
                 (i for i, t in enumerate(queue) if t["id"] == active["id"]), 0)
@@ -193,7 +200,7 @@ def document_status(sha256: str, prompt_mode: str = None):
         "num_pages": document["num_pages"], "times_submitted": document["times_submitted"],
         "prompt_mode": mode,
         "status": task["status"] if task else ("done" if cached else "unknown"),
-        "progress": task["progress"] if task else None,
+        "progress": (task["progress"] or {"done": 0, "total": len(task["pages"])}) if task else None,
         # The failure reason, or an agent staring at status=error has nothing
         # to act on (the "parsing error" incident: the client showed the status
         # word and nothing else).
