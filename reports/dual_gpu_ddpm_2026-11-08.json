@@ -1,0 +1,71 @@
+{
+  "date_utc": "2026-11-08T14:57:25.399492+00:00",
+  "code_ref": "c5606a8",
+  "hardware": {
+    "gpus": [
+      "NVIDIA GeForce RTX 5060 Ti 16 GiB",
+      "NVIDIA GeForce RTX 5060 Ti 16 GiB"
+    ],
+    "independent_vllm_processes": 2,
+    "vllm_version": "0.17.1"
+  },
+  "config": {
+    "engine": "vllm",
+    "gpus": [
+      0,
+      1
+    ],
+    "ports": [
+      8010,
+      8011
+    ],
+    "dpi": 150,
+    "max_pixels": 2200000,
+    "max_completion_tokens": 16384,
+    "prompt_mode": "prompt_layout_all_en",
+    "readiness_timeout_seconds": 600
+  },
+  "document": {
+    "url": "https://arxiv.org/pdf/2006.11239",
+    "sha256": "aee5e07a802e8dfd2a386374c94fd61d1d056cb7e1e0fec4f28e8120ff5d8505",
+    "bytes": 10267274,
+    "selected_pages": 25
+  },
+  "result": {
+    "status": "done",
+    "completed_pages": 25,
+    "wall_seconds_excluding_model_startup": 192.61,
+    "sum_page_seconds": 381.77,
+    "pages_per_backend": {
+      "http://127.0.0.1:8010/v1": 12,
+      "http://127.0.0.1:8011/v1": 13
+    },
+    "page_order_verified": true,
+    "max_simultaneous_generations": 2,
+    "gpu_sample_interval_seconds": 5,
+    "samples_with_both_gpus_at_least_90_percent": 25,
+    "total_samples": 35,
+    "generated_tokens": 26338,
+    "bundle": {
+      "zip_integrity_verified": true,
+      "layout_json_files": 25,
+      "image_files": 19,
+      "broken_image_links": 0
+    },
+    "repeat_cli_request": "cached; 25 pages; same task; requested output directory populated"
+  },
+  "cancellation": {
+    "active_streams_before_cancel": 2,
+    "status": "cancelled",
+    "seconds_to_terminal_status": 0.17,
+    "both_vllm_running_request_metrics_after_cancel": 0,
+    "partial_result_cached": false
+  },
+  "cpu_regressions": {
+    "command": "python3 -m pytest tests -m \"not gpu and not live\"",
+    "passed": 274,
+    "skipped": 4,
+    "deselected": 8
+  },
+  "measurement_note": "Wall time includes the first page inference warm-up, but excludes model startup. Sum of page durations is concurrent work, not a measured single-GPU baseline."
+}
